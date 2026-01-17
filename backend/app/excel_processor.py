@@ -18,6 +18,7 @@ class ExcelProcessor:
     async def extract_images_from_excel(file_content: bytes, filename: str) -> List[Dict[str, Any]]:
         """Extract all images from an Excel file"""
         images = []
+        tmp_path = None
         
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
@@ -65,12 +66,13 @@ class ExcelProcessor:
                         except Exception as e:
                             logger.warning(f"Error extracting image {img_idx} from sheet {sheet.title}: {str(e)}")
             
-            os.unlink(tmp_path)
+            if tmp_path:
+                os.unlink(tmp_path)
             return images
             
         except Exception as e:
             logger.error(f"Error processing Excel file {filename}: {str(e)}")
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             raise
     
@@ -78,6 +80,7 @@ class ExcelProcessor:
     async def extract_text_from_excel(file_content: bytes) -> List[Dict[str, Any]]:
         """Extract text content from Excel sheets"""
         sheets_data = []
+        tmp_path = None
         
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
@@ -99,11 +102,12 @@ class ExcelProcessor:
                     'rows': rows_data
                 })
             
-            os.unlink(tmp_path)
+            if tmp_path:
+                os.unlink(tmp_path)
             return sheets_data
             
         except Exception as e:
             logger.error(f"Error extracting text from Excel: {str(e)}")
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             raise

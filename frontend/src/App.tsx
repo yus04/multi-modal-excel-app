@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import './App.css';
 import { searchProcedures, uploadDocument } from './api';
 import { SearchResult, UploadResponse } from './types';
@@ -13,6 +13,7 @@ function App() {
   const [totalResults, setTotalResults] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,9 +73,10 @@ function App() {
       const response: UploadResponse = await uploadDocument(selectedFile);
       setSuccess(`${response.filename} をアップロードしました。${response.steps_extracted}件の手順を抽出しました。`);
       setSelectedFile(null);
-      // Reset file input
-      const fileInput = document.getElementById('file-input') as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
+      // Reset file input using ref
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     } catch (err) {
       setError('アップロード中にエラーが発生しました。もう一度お試しください。');
       console.error('Upload error:', err);
@@ -96,7 +98,7 @@ function App() {
           <h2>📤 Excel ファイルのアップロード</h2>
           <div className="file-input-wrapper">
             <input
-              id="file-input"
+              ref={fileInputRef}
               type="file"
               accept=".xlsx,.xls"
               onChange={handleFileSelect}

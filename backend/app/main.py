@@ -1,5 +1,6 @@
 import os
 import logging
+import base64
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -138,7 +139,6 @@ async def upload_document(file: UploadFile = File(...)):
         
         # Upload images to blob storage
         for img in images:
-            import base64
             img_bytes = base64.b64decode(img['data'])
             img_filename = f"images/{img['filename']}"
             img_url = await blob_service.upload_image(img_bytes, img_filename)

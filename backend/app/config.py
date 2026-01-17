@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     azure_storage_connection_string: str
     azure_storage_container_name: str = "excel-files"
     
-    # Azure Document Intelligence Configuration
-    azure_document_intelligence_endpoint: str
-    azure_document_intelligence_api_key: str
+    # Azure Document Intelligence Configuration (Optional)
+    azure_document_intelligence_endpoint: Optional[str] = None
+    azure_document_intelligence_api_key: Optional[str] = None
     
     # Application Configuration
     allowed_origins: str = "http://localhost:3000,http://localhost:5173"
