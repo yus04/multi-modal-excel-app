@@ -70,6 +70,7 @@ async def startup_event():
             openai_endpoint=settings.azure_openai_endpoint,
             openai_api_key=settings.azure_openai_api_key,
             openai_deployment=settings.azure_openai_deployment_name,
+            openai_embedding_deployment=settings.azure_openai_embedding_deployment,
             openai_api_version=settings.azure_openai_api_version
         )
         
@@ -122,7 +123,7 @@ async def upload_document(file: UploadFile = File(...)):
         file_content = await file.read()
         
         # Upload original file to blob storage
-        file_url = await blob_service.upload_file(
+        file_url = blob_service.upload_file(
             file_content,
             file.filename,
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -131,27 +132,27 @@ async def upload_document(file: UploadFile = File(...)):
         
         # Extract text and images
         logger.info("Extracting text from Excel...")
-        text_content = await ExcelProcessor.extract_text_from_excel(file_content)
+        text_content = ExcelProcessor.extract_text_from_excel(file_content)
         
         logger.info("Extracting images from Excel...")
-        images = await ExcelProcessor.extract_images_from_excel(file_content, file.filename)
+        images = ExcelProcessor.extract_images_from_excel(file_content, file.filename)
         logger.info(f"Extracted {len(images)} images")
         
         # Upload images to blob storage
         for img in images:
             img_bytes = base64.b64decode(img['data'])
             img_filename = f"images/{img['filename']}"
-            img_url = await blob_service.upload_image(img_bytes, img_filename)
+            img_url = blob_service.upload_image(img_bytes, img_filename)
             img['url'] = img_url
         
         # Structure document using multimodal LLM
         logger.info("Structuring document with LLM...")
-        steps = await llm_service.structure_document(text_content, images, file.filename)
+        steps = llm_service.structure_document(text_content, images, file.filename)
         logger.info(f"Extracted {len(steps)} procedure steps")
         
         # Index in Azure AI Search
         logger.info("Indexing document in Azure AI Search...")
-        await search_service.index_document(steps, file.filename, file_url)
+        search_service.index_document(steps, file.filename, file_url)
         
         return UploadResponse(
             success=True,
@@ -179,7 +180,7 @@ async def search(request: SearchRequest):
         logger.info(f"Searching for: {request.query}")
         
         # Perform hybrid search
-        results = await search_service.hybrid_search(
+        results = search_service.hybrid_search(
             query=request.query,
             top_k=request.top_k,
             include_images=request.include_images

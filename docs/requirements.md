@@ -43,7 +43,7 @@
 - 将来的にDI統合を推奨
 
 **FR-007**: システムはマルチモーダルLLMで構造化スキーマを定義すること
-- GPT-4oを使用して手順を自動構造化
+- GPT-4.1を使用して手順を自動構造化
 - 手順番号、タイトル、説明、画像を関連付け
 
 ## 入力データ範囲
@@ -116,8 +116,8 @@
 
 ### Azure サービス
 - **LLM**: Azure OpenAI Service
-  - モデル：GPT-4o (Microsoft Foundry Models gpt-4.5.2 相当)
-  - 埋め込み：text-embedding-ada-002
+  - モデル：GPT-4.1 (Microsoft Foundry Models gpt-4.5.2 相当)
+  - 埋め込み：text-embedding-3-small
 - **検索エンジン**: Azure AI Search
   - セマンティックハイブリッド検索を採用
 - **ストレージ**: Azure Blob Storage

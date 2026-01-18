@@ -35,13 +35,13 @@
 1. 作成したリソースに移動
 2. 「モデルのデプロイ」→「デプロイの作成」
 3. 以下のモデルをデプロイ：
-   - **GPT-4o**
-     - デプロイ名：`gpt-4o`（または任意の名前）
-     - モデル：`gpt-4o`
+   - **GPT-4.1**
+     - デプロイ名：`GPT-4.1`（または任意の名前）
+     - モデル：`GPT-4.1`
      - バージョン：最新
-   - **text-embedding-ada-002**
-     - デプロイ名：`text-embedding-ada-002`
-     - モデル：`text-embedding-ada-002`
+   - **text-embedding-3-small**
+     - デプロイ名：`text-embedding-3-small`
+     - モデル：`text-embedding-3-small`
      - バージョン：2
 
 ### 資格情報の取得
@@ -149,7 +149,7 @@ cp .env.template .env
 # Azure OpenAI Configuration
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-openai-api-key
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
+AZURE_OPENAI_DEPLOYMENT_NAME=GPT-4.1
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
 
 # Azure AI Search Configuration

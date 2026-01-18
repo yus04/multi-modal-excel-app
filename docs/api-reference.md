@@ -115,7 +115,7 @@ Content-Type: `multipart/form-data`
 1. Excel ファイルを受信
 2. Azure Blob Storage にアップロード
 3. テキストと画像を抽出
-4. GPT-4o で手順を構造化
+4. GPT-4.1 で手順を構造化
 5. 画像を Blob Storage にアップロード
 6. Azure AI Search にインデックス化
 

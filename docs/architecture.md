@@ -30,7 +30,7 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 │  │  Business Logic                                          │   │
 │  │  ┌────────────────┐  ┌─────────────────┐               │   │
 │  │  │ Excel          │  │ LLM Service     │               │   │
-│  │  │ Processor      │  │ (GPT-4o)        │               │   │
+│  │  │ Processor      │  │ (GPT-4.1)        │               │   │
 │  │  └────────────────┘  └─────────────────┘               │   │
 │  │  ┌────────────────┐  ┌─────────────────┐               │   │
 │  │  │ Blob Storage   │  │ Search Service  │               │   │
@@ -44,7 +44,7 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
 │  │ Azure OpenAI │  │  Azure AI    │  │  Azure Blob Storage  │ │
 │  │              │  │   Search     │  │                      │ │
-│  │ - GPT-4o     │  │              │  │ - Excel Files        │ │
+│  │ - GPT-4.1     │  │              │  │ - Excel Files        │ │
 │  │ - Embeddings │  │ - Vector DB  │  │ - Images             │ │
 │  │              │  │ - Hybrid     │  │                      │ │
 │  │              │  │   Search     │  │                      │ │
@@ -101,7 +101,7 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 - レイアウト情報の保持
 
 #### llm_service.py
-- GPT-4o による手順の構造化
+- GPT-4.1 による手順の構造化
 - マルチモーダル LLM 処理
 - JSON スキーマ定義
 
@@ -120,8 +120,8 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 ### 3. Azure Services Layer (インフラストラクチャ層)
 
 **Azure OpenAI Service**
-- **GPT-4o**: 手順の構造化、要約生成
-- **text-embedding-ada-002**: テキストの埋め込みベクトル生成
+- **GPT-4.1**: 手順の構造化、要約生成
+- **text-embedding-3-small**: テキストの埋め込みベクトル生成
 
 **Azure AI Search**
 - ベクトル検索 (HNSW アルゴリズム)
@@ -154,13 +154,13 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
    - Excel ファイルのアップロード
    - 画像のアップロード (PNG 形式)
    ↓
-4. Structure with GPT-4o
+4. Structure with GPT-4.1
    - 手順番号の抽出
    - タイトルと説明の生成
    - 画像との関連付け
    ↓
 5. Generate Embeddings
-   - text-embedding-ada-002 による埋め込み生成
+   - text-embedding-3-small による埋め込み生成
    - 1536 次元ベクトル
    ↓
 6. Index to Azure AI Search
@@ -176,7 +176,7 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 1. User Query Input
    ↓
 2. Generate Query Embedding
-   - text-embedding-ada-002 でクエリをベクトル化
+   - text-embedding-3-small でクエリをベクトル化
    ↓
 3. Hybrid Search
    - ベクトル検索: セマンティック類似性

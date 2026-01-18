@@ -15,7 +15,7 @@ class ExcelProcessor:
     """Process Excel files to extract content and images"""
     
     @staticmethod
-    async def extract_images_from_excel(file_content: bytes, filename: str) -> List[Dict[str, Any]]:
+    def extract_images_from_excel(file_content: bytes, filename: str) -> List[Dict[str, Any]]:
         """Extract all images from an Excel file"""
         images = []
         tmp_path = None
@@ -77,7 +77,7 @@ class ExcelProcessor:
             raise
     
     @staticmethod
-    async def extract_text_from_excel(file_content: bytes) -> List[Dict[str, Any]]:
+    def extract_text_from_excel(file_content: bytes) -> List[Dict[str, Any]]:
         """Extract text content from Excel sheets"""
         sheets_data = []
         tmp_path = None

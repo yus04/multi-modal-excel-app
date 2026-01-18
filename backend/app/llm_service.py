@@ -17,7 +17,7 @@ class MultiModalLLMService:
         )
         self.deployment_name = deployment_name
     
-    async def structure_document(
+    def structure_document(
         self,
         text_content: List[Dict[str, Any]],
         images: List[Dict[str, Any]],

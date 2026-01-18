@@ -1,4 +1,5 @@
 import json
+import base64
 from typing import List, Dict, Any, Optional
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
@@ -34,6 +35,7 @@ class SearchService:
         openai_endpoint: str,
         openai_api_key: str,
         openai_deployment: str,
+        openai_embedding_deployment: str,
         openai_api_version: str
     ):
         self.credential = AzureKeyCredential(search_api_key)
@@ -54,7 +56,7 @@ class SearchService:
             api_key=openai_api_key,
             api_version=openai_api_version
         )
-        self.embedding_model = "text-embedding-ada-002"
+        self.embedding_model = openai_embedding_deployment
         
         self._ensure_index_exists()
     
@@ -127,7 +129,7 @@ class SearchService:
         self.index_client.create_index(index)
         logger.info(f"Created index {self.index_name}")
     
-    async def generate_embedding(self, text: str) -> List[float]:
+    def generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using Azure OpenAI"""
         try:
             response = self.openai_client.embeddings.create(
@@ -139,7 +141,7 @@ class SearchService:
             logger.error(f"Error generating embedding: {str(e)}")
             raise
     
-    async def index_document(self, steps: List[Dict[str, Any]], filename: str, file_url: str):
+    def index_document(self, steps: List[Dict[str, Any]], filename: str, file_url: str):
         """Index document steps into Azure AI Search"""
         documents = []
         
@@ -149,7 +151,7 @@ class SearchService:
             
             # Generate embedding
             try:
-                content_vector = await self.generate_embedding(content)
+                content_vector = self.generate_embedding(content)
             except Exception as e:
                 logger.error(f"Failed to generate embedding for step {idx}: {str(e)}")
                 content_vector = [0.0] * 1536  # Fallback empty vector
@@ -160,8 +162,12 @@ class SearchService:
                 if 'url' in img:
                     image_urls.append(img['url'])
             
+            # Generate URL-safe Base64 encoded ID
+            doc_id = f"{filename}_{idx}"
+            safe_id = base64.urlsafe_b64encode(doc_id.encode('utf-8')).decode('ascii').rstrip('=')
+            
             doc = {
-                "id": f"{filename}_{idx}",
+                "id": safe_id,
                 "step_number": step.get('step_number', str(idx + 1)),
                 "title": step.get('title', ''),
                 "description": step.get('description', ''),
@@ -184,7 +190,7 @@ class SearchService:
                 logger.error(f"Error indexing documents: {str(e)}")
                 raise
     
-    async def hybrid_search(
+    def hybrid_search(
         self,
         query: str,
         top_k: int = 5,
@@ -193,7 +199,7 @@ class SearchService:
         """Perform hybrid search (vector + keyword + semantic)"""
         try:
             # Generate query embedding
-            query_vector = await self.generate_embedding(query)
+            query_vector = self.generate_embedding(query)
             
             # Perform hybrid search with semantic ranking
             results = self.search_client.search(

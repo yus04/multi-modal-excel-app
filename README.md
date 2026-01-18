@@ -9,7 +9,7 @@
 ### 主な特徴
 
 - **📊 Excel ファイル処理**: Excel ファイルからテキストと画像を自動抽出
-- **🤖 AI 構造化**: Azure OpenAI (GPT-4o) による手順の自動構造化
+- **🤖 AI 構造化**: Azure OpenAI (GPT-4.1) による手順の自動構造化
 - **🔍 ハイブリッド検索**: ベクトル検索 + キーワード検索 + セマンティック検索
 - **🖼️ 画像同時表示**: 検索結果に関連画像を自動で表示
 - **📎 出典リンク**: 元の Excel ファイルへのリンクを提供
@@ -43,7 +43,7 @@
 - Pydantic (データバリデーション)
 
 **Azure サービス**
-- Azure OpenAI Service (GPT-4o, text-embedding-ada-002)
+- Azure OpenAI Service (GPT-4.1, text-embedding-3-small)
 - Azure AI Search (ハイブリッド + セマンティック検索)
 - Azure Blob Storage (ファイル保存)
 - Azure Document Intelligence (文書解析)
@@ -53,7 +53,7 @@
 ### 1. ドキュメント処理パイプライン
 - Excel ファイルのアップロード (.xlsx, .xls)
 - テキストと画像の自動抽出
-- GPT-4o による手順の構造化
+- GPT-4.1 による手順の構造化
 - Azure Blob Storage へのアップロード
 - Azure AI Search へのインデックス作成
 
@@ -102,8 +102,8 @@ cd multi-modal-excel-app
 cd backend
 
 # 仮想環境の作成
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # Windows: venv\Scripts\activate
 
 # 依存関係のインストール
 pip install -r requirements.txt
@@ -119,7 +119,7 @@ cp .env.template .env
 # Azure OpenAI Configuration
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-api-key
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
+AZURE_OPENAI_DEPLOYMENT_NAME=GPT-4.1
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
 
 # Azure AI Search Configuration
@@ -281,9 +281,9 @@ Extract Text & Images (openpyxl)
     ↓
 Upload to Blob Storage
     ↓
-Structure with GPT-4o (multimodal LLM)
+Structure with GPT-4.1 (multimodal LLM)
     ↓
-Generate Embeddings (text-embedding-ada-002)
+Generate Embeddings (text-embedding-3-small)
     ↓
 Index to Azure AI Search
     ↓
@@ -365,28 +365,9 @@ npm run lint
 - CORS 設定を確認
 - 画像 URL が正しく生成されているか確認
 
-## 🤝 コントリビューション
-
-プルリクエストを歓迎します。大きな変更の場合は、まず Issue を開いて変更内容を議論してください。
-
 ## 📄 ライセンス
 
 MIT License
-
-## 👥 作者
-
-yus04
-
-## 🙏 謝辞
-
-- Azure AI Services
-- FastAPI
-- React
-- すべてのオープンソースコントリビューター
-
-## 📞 サポート
-
-問題が発生した場合は、GitHub Issues でお知らせください。
 
 ---
 

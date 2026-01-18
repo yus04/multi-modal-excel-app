@@ -1,7 +1,7 @@
 import io
 import base64
 from typing import List, Dict, Any, Optional
-from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.storage.blob import BlobServiceClient, ContentSettings, PublicAccess
 from azure.core.exceptions import ResourceNotFoundError
 from PIL import Image
 import logging
@@ -22,9 +22,12 @@ class BlobStorageService:
             container_client.get_container_properties()
         except ResourceNotFoundError:
             logger.info(f"Creating container: {self.container_name}")
-            self.blob_service_client.create_container(self.container_name)
+            self.blob_service_client.create_container(
+                self.container_name,
+                public_access=PublicAccess.Blob
+            )
     
-    async def upload_file(self, file_content: bytes, filename: str, content_type: str = "application/octet-stream") -> str:
+    def upload_file(self, file_content: bytes, filename: str, content_type: str = "application/octet-stream") -> str:
         """Upload a file to blob storage"""
         try:
             blob_client = self.blob_service_client.get_blob_client(
@@ -44,11 +47,11 @@ class BlobStorageService:
             logger.error(f"Error uploading file {filename}: {str(e)}")
             raise
     
-    async def upload_image(self, image_data: bytes, filename: str) -> str:
+    def upload_image(self, image_data: bytes, filename: str) -> str:
         """Upload an image to blob storage"""
-        return await self.upload_file(image_data, filename, content_type="image/png")
+        return self.upload_file(image_data, filename, content_type="image/png")
     
-    async def get_file_url(self, filename: str) -> str:
+    def get_file_url(self, filename: str) -> str:
         """Get the URL for a file in blob storage"""
         blob_client = self.blob_service_client.get_blob_client(
             container=self.container_name,
@@ -56,7 +59,7 @@ class BlobStorageService:
         )
         return blob_client.url
     
-    async def download_file(self, filename: str) -> bytes:
+    def download_file(self, filename: str) -> bytes:
         """Download a file from blob storage"""
         try:
             blob_client = self.blob_service_client.get_blob_client(
