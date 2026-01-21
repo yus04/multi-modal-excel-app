@@ -9,7 +9,7 @@
 ### 主な特徴
 
 - **📊 Excel ファイル処理**: Excel ファイルからテキストと画像を自動抽出
-- **🤖 AI 構造化**: Azure OpenAI (GPT-4.1) による手順の自動構造化
+- **🤖 マルチモーダル AI**: Azure OpenAI (GPT-4o) による画像の自動説明生成とコンテンツ統合
 - **🔍 ハイブリッド検索**: ベクトル検索 + キーワード検索 + セマンティック検索
 - **🖼️ 画像同時表示**: 検索結果に関連画像を自動で表示
 - **📎 出典リンク**: 元の Excel ファイルへのリンクを提供
@@ -43,7 +43,7 @@
 - Pydantic (データバリデーション)
 
 **Azure サービス**
-- Azure OpenAI Service (GPT-4.1, text-embedding-3-small)
+- Azure OpenAI Service (GPT-4o with Vision, text-embedding-3-small)
 - Azure AI Search (ハイブリッド + セマンティック検索)
 - Azure Blob Storage (ファイル保存)
 - Azure Document Intelligence (文書解析)
@@ -52,10 +52,12 @@
 
 ### 1. ドキュメント処理パイプライン
 - Excel ファイルのアップロード (.xlsx, .xls)
-- テキストと画像の自動抽出
-- GPT-4.1 による手順の構造化
+- テキストと画像の自動抽出（位置情報を含む）
+- GPT-4o による画像の説明文生成
+- テキストと画像説明を位置情報に基づいて統合
+- 統合コンテンツのベクトル化
 - Azure Blob Storage へのアップロード
-- Azure AI Search へのインデックス作成
+- Azure AI Search へのインデックス作成（1ファイル = 1ドキュメント）
 
 ### 2. 検索機能
 - **ハイブリッド検索**
@@ -119,8 +121,10 @@ cp .env.template .env
 # Azure OpenAI Configuration
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-api-key
-AZURE_OPENAI_DEPLOYMENT_NAME=GPT-4.1
+# Deployment name should support vision API (e.g., gpt-4o, gpt-4-vision-preview)
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
 
 # Azure AI Search Configuration
 AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
@@ -277,15 +281,28 @@ file: Excel ファイル (.xlsx, .xls)
 ```
 Excel File Upload
     ↓
-Extract Text & Images (openpyxl)
+Extract Text & Images with Position (openpyxl)
+    - テキスト: シート、行番号、セルの内容
+    - 画像: 埋め込み画像、位置情報（行・列）
     ↓
-Upload to Blob Storage
+Upload Images to Blob Storage
+    - 画像のアップロード (PNG 形式)
     ↓
-Structure with GPT-4.1 (multimodal LLM)
+Generate Image Descriptions (GPT-4o Vision API)
+    - 各画像の内容を日本語で説明
+    ↓
+Merge Text and Image Descriptions
+    - テキストと画像説明を位置情報に基づいて統合
+    - 画像の位置に説明文を挿入
     ↓
 Generate Embeddings (text-embedding-3-small)
+    - 統合されたコンテンツをベクトル化
+    - 1536 次元ベクトル
     ↓
-Index to Azure AI Search
+Index to Azure AI Search (1 file = 1 document)
+    - content: 統合されたテキストと画像説明
+    - content_vector: ベクトル化されたコンテンツ
+    - image_urls: 画像表示用の URL リスト
     ↓
 Complete
 ```

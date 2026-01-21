@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     # Azure OpenAI Configuration
     azure_openai_endpoint: str
     azure_openai_api_key: str
-    azure_openai_deployment_name: str = "GPT-4.1"
+    azure_openai_deployment_name: str = "gpt-4o"  # Should support vision API
     azure_openai_embedding_deployment: str = "text-embedding-3-small"
     azure_openai_api_version: str = "2024-02-15-preview"
     
