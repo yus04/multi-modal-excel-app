@@ -78,7 +78,7 @@ class ExcelProcessor:
     
     @staticmethod
     def extract_text_from_excel(file_content: bytes) -> List[Dict[str, Any]]:
-        """Extract text content from Excel sheets"""
+        """Extract text content from Excel sheets with row numbers"""
         sheets_data = []
         tmp_path = None
         
@@ -89,16 +89,20 @@ class ExcelProcessor:
             
             workbook = load_workbook(tmp_path, data_only=True)
             
-            for sheet in workbook.worksheets:
+            for sheet_idx, sheet in enumerate(workbook.worksheets):
                 rows_data = []
-                for row in sheet.iter_rows(values_only=True):
+                for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
                     # Filter out empty rows
                     row_values = [str(cell) if cell is not None else "" for cell in row]
                     if any(val.strip() for val in row_values):
-                        rows_data.append(row_values)
+                        rows_data.append({
+                            'row_number': row_idx,
+                            'values': row_values
+                        })
                 
                 sheets_data.append({
                     'sheet_name': sheet.title,
+                    'sheet_index': sheet_idx,
                     'rows': rows_data
                 })
             
