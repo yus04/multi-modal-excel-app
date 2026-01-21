@@ -1,12 +1,9 @@
 export interface SearchResult {
-  step_number: string;
-  title: string;
-  summary: string;
-  images: string[];
+  answer: string;  // LLMが生成した回答テキスト
+  images: string[];  // 回答に関連する画像のみ
   source_document: string;
   source_url: string;
   score: number;
-  page_number?: number;
 }
 
 export interface SearchRequest {
@@ -28,4 +25,17 @@ export interface UploadResponse {
   filename: string;
   document_id?: string;
   steps_extracted: number;
+  job_id?: string;
+}
+
+export interface ProcessingStatus {
+  job_id: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  filename: string;
+  progress: number;
+  total_images: number;
+  processed_images: number;
+  current_step: string;
+  message?: string;
+  error?: string;
 }

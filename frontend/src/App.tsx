@@ -1,7 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
-import { searchProcedures, uploadDocument } from './api';
-import { SearchResult, UploadResponse } from './types';
+import { searchProcedures, uploadDocument, getProcessingStatus } from './api';
+import { SearchResult, UploadResponse, ProcessingStatus } from './types';
 
 function App() {
   const [query, setQuery] = useState('');
@@ -13,7 +13,9 @@ function App() {
   const [totalResults, setTotalResults] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const statusIntervalRef = useRef<number | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,25 +67,107 @@ function App() {
       return;
     }
 
+    console.log('[Upload] Starting upload for file:', selectedFile.name);
     setUploading(true);
     setError(null);
     setSuccess(null);
+    setProcessingStatus(null);
 
     try {
       const response: UploadResponse = await uploadDocument(selectedFile);
-      setSuccess(`${response.filename} をアップロードしました。${response.steps_extracted}件の手順を抽出しました。`);
-      setSelectedFile(null);
-      // Reset file input using ref
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+      console.log('[Upload] Upload response:', response);
+      console.log('[Upload] Response job_id:', response.job_id);
+      console.log('[Upload] Response type:', typeof response.job_id);
+      
+      if (response.job_id) {
+        console.log('[Upload] Job ID found, starting status polling for job:', response.job_id);
+        
+        // Initialize processing status immediately to show progress bar
+        const initialStatus = {
+          job_id: response.job_id,
+          status: 'pending',
+          filename: selectedFile.name,
+          progress: 0,
+          total_images: 0,
+          processed_images: 0,
+          current_step: '処理を開始しています...',
+          message: '',
+          error: ''
+        };
+        console.log('[Upload] Setting initial processing status:', initialStatus);
+        setProcessingStatus(initialStatus);
+        
+        // Start polling for status
+        startStatusPolling(response.job_id);
+      } else {
+        console.log('[Upload] No job_id in response, using old synchronous behavior');
+        console.log('[Upload] Full response object:', JSON.stringify(response));
+        // Old behavior (synchronous processing)
+        setSuccess(`${response.filename} をアップロードしました。${response.steps_extracted}件の手順を抽出しました。`);
+        setSelectedFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+        setUploading(false);
       }
     } catch (err) {
       setError('アップロード中にエラーが発生しました。もう一度お試しください。');
-      console.error('Upload error:', err);
-    } finally {
+      console.error('[Upload] Upload error:', err);
       setUploading(false);
     }
   };
+
+  const startStatusPolling = (jobId: string) => {
+    console.log('[Polling] Starting status polling for job:', jobId);
+    const pollStatus = async () => {
+      try {
+        console.log('[Polling] Fetching status...');
+        const status = await getProcessingStatus(jobId);
+        console.log('[Polling] Processing status update:', status);
+        console.log('[Polling] Status:', status.status, 'Progress:', status.progress + '%', 'Step:', status.current_step);
+        setProcessingStatus(status);
+
+        if (status.status === 'completed') {
+          console.log('[Polling] Processing completed');
+          setSuccess(`${status.filename} の処理が完了しました！`);
+          setUploading(false);
+          setSelectedFile(null);
+          if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+          }
+          if (statusIntervalRef.current) {
+            console.log('[Polling] Clearing polling interval');
+            clearInterval(statusIntervalRef.current);
+            statusIntervalRef.current = null;
+          }
+        } else if (status.status === 'failed') {
+          console.log('[Polling] Processing failed:', status.error);
+          setError(`処理中にエラーが発生しました: ${status.error || '不明なエラー'}`);
+          setUploading(false);
+          if (statusIntervalRef.current) {
+            console.log('[Polling] Clearing polling interval');
+            clearInterval(statusIntervalRef.current);
+            statusIntervalRef.current = null;
+          }
+        }
+      } catch (err) {
+        console.error('[Polling] Status polling error:', err);
+      }
+    };
+
+    // Poll every 1 second
+    console.log('[Polling] Starting polling interval (every 1000ms)');
+    pollStatus();
+    statusIntervalRef.current = window.setInterval(pollStatus, 1000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (statusIntervalRef.current) {
+        clearInterval(statusIntervalRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="app">
@@ -118,6 +202,32 @@ function App() {
             </p>
           )}
         </section>
+
+        {/* Processing Status Bar */}
+        {processingStatus && (processingStatus.status === 'pending' || processingStatus.status === 'processing') && (
+          <section className="status-section">
+            <h3>処理状況</h3>
+            <div className="status-bar-container">
+              <div className="status-info">
+                <span className="status-filename">{processingStatus.filename}</span>
+                <span className="status-step">{processingStatus.current_step}</span>
+                {processingStatus.total_images > 0 && (
+                  <span className="status-images">
+                    画像: {processingStatus.processed_images} / {processingStatus.total_images}
+                  </span>
+                )}
+              </div>
+              <div className="progress-bar">
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ width: `${processingStatus.progress}%` }}
+                >
+                  <span className="progress-text">{processingStatus.progress}%</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
 
         {/* Error and Success Messages */}
         {error && <div className="error">{error}</div>}
@@ -164,14 +274,9 @@ function App() {
 
             {results.map((result, index) => (
               <div key={index} className="result-card">
-                <div className="result-header">
-                  <div className="result-title">
-                    <span className="step-number">手順 {result.step_number}</span>
-                    <h3>{result.title}</h3>
-                  </div>
+                <div className="result-content">
+                  <p className="result-answer">{result.answer}</p>
                 </div>
-
-                <p className="result-summary">{result.summary}</p>
 
                 {result.images && result.images.length > 0 && (
                   <div className="result-images">
@@ -179,7 +284,7 @@ function App() {
                       <img
                         key={imgIndex}
                         src={imageUrl}
-                        alt={`手順 ${result.step_number} - 画像 ${imgIndex + 1}`}
+                        alt={`関連画像 ${imgIndex + 1}`}
                         className="result-image"
                       />
                     ))}
@@ -197,7 +302,6 @@ function App() {
                     >
                       {result.source_document}
                     </a>
-                    {result.page_number && ` (ページ ${result.page_number})`}
                   </div>
                   <span className="score">
                     スコア: {result.score.toFixed(2)}
@@ -216,7 +320,7 @@ function App() {
       </main>
 
       <footer className="footer">
-        <p>© 2024 Multi-Modal Excel Search System | Powered by Azure AI</p>
+        <p>© 2026 Multi-Modal Excel Search System | Powered by Azure AI</p>
       </footer>
     </div>
   );

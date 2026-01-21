@@ -18,14 +18,11 @@ class DocumentMetadata(BaseModel):
 
 
 class SearchResult(BaseModel):
-    step_number: str
-    title: str
-    summary: str
-    images: List[str] = Field(default_factory=list)
+    answer: str  # LLMが生成した回答テキスト
+    images: List[str] = Field(default_factory=list)  # 回答に関連する画像のみ
     source_document: str
     source_url: str
     score: float
-    page_number: Optional[int] = None
 
 
 class SearchRequest(BaseModel):
@@ -47,3 +44,16 @@ class UploadResponse(BaseModel):
     filename: str
     document_id: Optional[str] = None
     steps_extracted: int = 0
+    job_id: Optional[str] = None
+
+
+class ProcessingStatus(BaseModel):
+    job_id: str
+    status: str  # "pending", "processing", "completed", "failed"
+    filename: str
+    progress: int = 0  # 0-100
+    total_images: int = 0
+    processed_images: int = 0
+    current_step: str = ""
+    message: str = ""
+    error: str = ""

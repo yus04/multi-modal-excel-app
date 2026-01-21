@@ -1,14 +1,16 @@
 import os
 import logging
 import base64
+import uuid
+import asyncio
 from datetime import datetime
-from typing import Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from typing import Optional, Dict
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.models import SearchRequest, SearchResponse, UploadResponse, SearchResult
+from app.models import SearchRequest, SearchResponse, UploadResponse, SearchResult, ProcessingStatus
 from app.blob_service import BlobStorageService
 from app.excel_processor import ExcelProcessor
 from app.llm_service import MultiModalLLMService
@@ -41,6 +43,9 @@ app.add_middleware(
 blob_service: Optional[BlobStorageService] = None
 llm_service: Optional[MultiModalLLMService] = None
 search_service: Optional[SearchService] = None
+
+# In-memory job status storage (for production, use Redis or database)
+job_status_store: Dict[str, ProcessingStatus] = {}
 
 
 @app.on_event("startup")
@@ -93,18 +98,107 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    logger.info("Health check requested")
     return {
         "status": "healthy",
         "services": {
             "blob_storage": blob_service is not None,
             "llm_service": llm_service is not None,
             "search_service": search_service is not None
-        }
+        },
+        "job_store_size": len(job_status_store)
     }
 
 
+@app.get("/status/{job_id}", response_model=ProcessingStatus)
+async def get_processing_status(job_id: str):
+    """Get the status of a document processing job"""
+    logger.debug(f"Status request for job_id: {job_id}")
+    if job_id not in job_status_store:
+        logger.warning(f"Job not found: {job_id}. Available jobs: {list(job_status_store.keys())}")
+        raise HTTPException(status_code=404, detail="Job not found")
+    status = job_status_store[job_id]
+    logger.debug(f"Returning status: {status.status}, progress: {status.progress}%")
+    return status
+
+
+def process_document_background(job_id: str, file_content: bytes, filename: str):
+    """Background task to process document with progress tracking"""
+    logger.info(f"[{job_id}] Background processing started for {filename}")
+    try:
+        # Update status: Upload to blob storage
+        job_status_store[job_id].status = "processing"
+        job_status_store[job_id].current_step = "Blob Storageにアップロード中..."
+        job_status_store[job_id].progress = 0
+        logger.info(f"[{job_id}] Status updated to 'processing', progress: 0%")
+        
+        file_url = blob_service.upload_file(
+            file_content,
+            filename,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        logger.info(f"Uploaded file to: {file_url}")
+        
+        # Extract text and images
+        job_status_store[job_id].current_step = "テキストと画像を抽出中..."
+        job_status_store[job_id].progress = 0
+        text_content = ExcelProcessor.extract_text_from_excel(file_content)
+        
+        images = ExcelProcessor.extract_images_from_excel(file_content, filename)
+        job_status_store[job_id].total_images = len(images)
+        logger.info(f"Extracted {len(images)} images")
+        
+        # Upload images to blob storage (keep progress at 0)
+        job_status_store[job_id].current_step = "画像をアップロード中..."
+        for idx, img in enumerate(images):
+            img_bytes = base64.b64decode(img['data'])
+            img_filename = f"images/{img['filename']}"
+            img_url = blob_service.upload_image(img_bytes, img_filename)
+            img['url'] = img_url
+        
+        # Structure document using multimodal LLM with progress callback
+        def progress_callback(current: int, total: int, message: str):
+            job_status_store[job_id].processed_images = current
+            job_status_store[job_id].current_step = message
+            # Image processing takes 0-90% of progress
+            # Progress starts from 0 and updates after each image is processed
+            if total > 0:
+                progress_percent = int((current / total) * 90)
+                job_status_store[job_id].progress = progress_percent
+            logger.info(f"Progress update: {current}/{total} - {message} ({job_status_store[job_id].progress}%)")
+        
+        job_status_store[job_id].current_step = "画像の説明を生成中..."
+        job_status_store[job_id].progress = 0
+        logger.info(f"Starting document structuring with {len(images)} images")
+        
+        document = llm_service.structure_document(
+            text_content, 
+            images, 
+            filename,
+            progress_callback=progress_callback
+        )
+        logger.info(f"Document structured with {document['metadata']['image_count']} images")
+        
+        # Index in Azure AI Search
+        job_status_store[job_id].current_step = "インデックスに登録中..."
+        job_status_store[job_id].progress = 95
+        search_service.index_document(document, filename, file_url)
+        
+        # Complete
+        job_status_store[job_id].status = "completed"
+        job_status_store[job_id].current_step = "完了"
+        job_status_store[job_id].progress = 100
+        job_status_store[job_id].message = "ドキュメントの処理が完了しました"
+        
+    except Exception as e:
+        logger.error(f"Error processing document in background: {str(e)}")
+        job_status_store[job_id].status = "failed"
+        job_status_store[job_id].error = str(e)
+        job_status_store[job_id].message = "処理中にエラーが発生しました"
+
+
 @app.post("/upload", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
     Upload and process an Excel document
     
@@ -119,48 +213,46 @@ async def upload_document(file: UploadFile = File(...)):
     try:
         logger.info(f"Processing upload: {file.filename}")
         
+        # Generate unique job ID
+        job_id = str(uuid.uuid4())
+        logger.info(f"Generated job_id: {job_id}")
+        
         # Read file content
         file_content = await file.read()
+        logger.info(f"Read {len(file_content)} bytes from file")
         
-        # Upload original file to blob storage
-        file_url = blob_service.upload_file(
-            file_content,
-            file.filename,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        logger.info(f"Uploaded file to: {file_url}")
-        
-        # Extract text and images
-        logger.info("Extracting text from Excel...")
-        text_content = ExcelProcessor.extract_text_from_excel(file_content)
-        
-        logger.info("Extracting images from Excel...")
-        images = ExcelProcessor.extract_images_from_excel(file_content, file.filename)
-        logger.info(f"Extracted {len(images)} images")
-        
-        # Upload images to blob storage
-        for img in images:
-            img_bytes = base64.b64decode(img['data'])
-            img_filename = f"images/{img['filename']}"
-            img_url = blob_service.upload_image(img_bytes, img_filename)
-            img['url'] = img_url
-        
-        # Structure document using multimodal LLM
-        logger.info("Structuring document with LLM...")
-        document = llm_service.structure_document(text_content, images, file.filename)
-        logger.info(f"Document structured with {document['metadata']['image_count']} images")
-        
-        # Index in Azure AI Search
-        logger.info("Indexing document in Azure AI Search...")
-        search_service.index_document(document, file.filename, file_url)
-        
-        return UploadResponse(
-            success=True,
-            message="Document uploaded and processed successfully",
+        # Initialize job status
+        job_status_store[job_id] = ProcessingStatus(
+            job_id=job_id,
+            status="pending",
             filename=file.filename,
-            document_id=file.filename,
-            steps_extracted=1  # Now we have 1 document per file
+            progress=0,
+            total_images=0,
+            processed_images=0,
+            current_step="処理を開始しています...",
+            message="",
+            error=""
         )
+        logger.info(f"Initialized job status for {job_id}")
+        
+        # Start background processing
+        background_tasks.add_task(
+            process_document_background,
+            job_id,
+            file_content,
+            file.filename
+        )
+        logger.info(f"Started background task for {job_id}")
+        
+        response = UploadResponse(
+            success=True,
+            message="Document upload started. Use job_id to check progress.",
+            filename=file.filename,
+            job_id=job_id,
+            steps_extracted=0
+        )
+        logger.info(f"Returning response with job_id: {response.job_id}")
+        return response
         
     except Exception as e:
         logger.error(f"Error processing upload: {str(e)}")

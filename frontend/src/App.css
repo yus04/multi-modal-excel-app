@@ -100,6 +100,94 @@ code {
   cursor: not-allowed;
 }
 
+.status-section {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin-bottom: 2rem;
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.status-section h3 {
+  margin-top: 0;
+  color: #333;
+  font-size: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.status-bar-container {
+  width: 100%;
+}
+
+.status-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.status-filename {
+  font-weight: 600;
+  color: #333;
+  font-size: 1rem;
+}
+
+.status-step {
+  color: #667eea;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.status-images {
+  color: #888;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 30px;
+  background-color: #f0f0f0;
+  border-radius: 15px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  transition: width 0.5s ease-out;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 50px;
+}
+
+.progress-text {
+  color: white;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  position: relative;
+  z-index: 1;
+}
+
 .search-section {
   background: white;
   padding: 2rem;
@@ -194,36 +282,16 @@ code {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.result-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: start;
-  margin-bottom: 1rem;
+.result-content {
+  margin-bottom: 1.5rem;
 }
 
-.result-title {
-  flex: 1;
-}
-
-.step-number {
-  background: #667eea;
-  color: white;
-  padding: 0.25rem 0.75rem;
-  border-radius: 20px;
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-
-.result-card h3 {
-  margin: 0.5rem 0;
+.result-answer {
   color: #333;
-  font-size: 1.25rem;
-}
-
-.result-summary {
-  color: #666;
-  line-height: 1.6;
-  margin-bottom: 1rem;
+  line-height: 1.8;
+  font-size: 1rem;
+  white-space: pre-wrap;
+  margin: 0;
 }
 
 .result-images {
