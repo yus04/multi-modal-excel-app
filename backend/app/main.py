@@ -147,19 +147,19 @@ async def upload_document(file: UploadFile = File(...)):
         
         # Structure document using multimodal LLM
         logger.info("Structuring document with LLM...")
-        steps = llm_service.structure_document(text_content, images, file.filename)
-        logger.info(f"Extracted {len(steps)} procedure steps")
+        document = llm_service.structure_document(text_content, images, file.filename)
+        logger.info(f"Document structured with {document['metadata']['image_count']} images")
         
         # Index in Azure AI Search
         logger.info("Indexing document in Azure AI Search...")
-        search_service.index_document(steps, file.filename, file_url)
+        search_service.index_document(document, file.filename, file_url)
         
         return UploadResponse(
             success=True,
             message="Document uploaded and processed successfully",
             filename=file.filename,
             document_id=file.filename,
-            steps_extracted=len(steps)
+            steps_extracted=1  # Now we have 1 document per file
         )
         
     except Exception as e:

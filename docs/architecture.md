@@ -101,9 +101,10 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 - レイアウト情報の保持
 
 #### llm_service.py
-- GPT-4.1 による手順の構造化
+- GPT-4o Vision API による画像の説明生成
+- テキストと画像説明の統合
 - マルチモーダル LLM 処理
-- JSON スキーマ定義
+- 位置情報に基づくコンテンツのマージ
 
 #### blob_service.py
 - Azure Blob Storage へのアップロード
@@ -120,8 +121,8 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 ### 3. Azure Services Layer (インフラストラクチャ層)
 
 **Azure OpenAI Service**
-- **GPT-4.1**: 手順の構造化、要約生成
-- **text-embedding-3-small**: テキストの埋め込みベクトル生成
+- **GPT-4o with Vision**: 画像の内容説明生成、マルチモーダル処理
+- **text-embedding-3-small**: 統合コンテンツの埋め込みベクトル生成
 
 **Azure AI Search**
 - ベクトル検索 (HNSW アルゴリズム)
@@ -147,27 +148,33 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 1. Excel Upload
    ↓
 2. Extract Text & Images (openpyxl)
-   - テキスト: シート、行、セルの内容
-   - 画像: 埋め込み画像の抽出、位置情報の保持
+   - テキスト: シート、行番号、セルの内容
+   - 画像: 埋め込み画像の抽出、位置情報（行・列）の保持
    ↓
 3. Upload to Blob Storage
    - Excel ファイルのアップロード
    - 画像のアップロード (PNG 形式)
    ↓
-4. Structure with GPT-4.1
-   - 手順番号の抽出
-   - タイトルと説明の生成
-   - 画像との関連付け
+4. Generate Image Descriptions with GPT-4o Vision
+   - 各画像の内容を日本語で詳細に説明
+   - 作業標準書の文脈に沿った説明を生成
    ↓
-5. Generate Embeddings
-   - text-embedding-3-small による埋め込み生成
+5. Merge Text and Image Descriptions
+   - テキストと画像説明を位置情報に基づいて統合
+   - 画像の位置（行番号）に説明文を挿入
+   ↓
+6. Generate Embeddings
+   - text-embedding-3-small による統合コンテンツの埋め込み生成
    - 1536 次元ベクトル
    ↓
-6. Index to Azure AI Search
+7. Index to Azure AI Search (1 file = 1 document)
    - ドキュメントのインデックス化
-   - ベクトル、テキスト、メタデータの保存
+   - content: 統合されたテキストと画像説明
+   - content_vector: ベクトル化されたコンテンツ
+   - image_urls: 画像表示用の URL リスト
+   - メタデータの保存
    ↓
-7. Complete
+8. Complete
 ```
 
 ### 検索フロー
@@ -212,35 +219,21 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
       "searchable": false
     },
     {
-      "name": "step_number",
+      "name": "filename",
       "type": "Edm.String",
       "searchable": true,
       "filterable": true
     },
     {
-      "name": "title",
+      "name": "content",
       "type": "Edm.String",
-      "searchable": true
-    },
-    {
-      "name": "description",
-      "type": "Edm.String",
-      "searchable": true
-    },
-    {
-      "name": "source_document",
-      "type": "Edm.String",
-      "filterable": true
+      "searchable": true,
+      "description": "統合されたテキストと画像説明"
     },
     {
       "name": "source_url",
       "type": "Edm.String",
       "searchable": false
-    },
-    {
-      "name": "page_number",
-      "type": "Edm.Int32",
-      "filterable": true
     },
     {
       "name": "image_urls",
@@ -256,11 +249,18 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
       "name": "content_vector",
       "type": "Collection(Edm.Single)",
       "dimensions": 1536,
-      "vectorSearchProfile": "myHnswProfile"
+      "vectorSearchProfile": "myHnswProfile",
+      "description": "ベクトル化されたコンテンツ"
     }
   ]
 }
 ```
+
+**スキーマの変更点:**
+- `step_number`, `title`, `description`, `source_document`, `page_number` フィールドを削除
+- `filename` フィールドを追加（ファイル名の保存とフィルタリング）
+- `content` フィールドを追加（テキストと画像説明を統合したコンテンツ）
+- 1ファイル = 1ドキュメントの設計（チャンキングなし）
 
 ## セキュリティアーキテクチャ
 

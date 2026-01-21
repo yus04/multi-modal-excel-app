@@ -73,12 +73,9 @@ class SearchService:
         """Create Azure AI Search index with vector and semantic search"""
         fields = [
             SimpleField(name="id", type=SearchFieldDataType.String, key=True),
-            SearchableField(name="step_number", type=SearchFieldDataType.String, filterable=True),
-            SearchableField(name="title", type=SearchFieldDataType.String, searchable=True),
-            SearchableField(name="description", type=SearchFieldDataType.String, searchable=True),
-            SearchableField(name="source_document", type=SearchFieldDataType.String, filterable=True),
+            SearchableField(name="filename", type=SearchFieldDataType.String, filterable=True),
+            SearchableField(name="content", type=SearchFieldDataType.String, searchable=True),
             SimpleField(name="source_url", type=SearchFieldDataType.String),
-            SimpleField(name="page_number", type=SearchFieldDataType.Int32, filterable=True),
             SimpleField(name="image_urls", type=SearchFieldDataType.Collection(SearchFieldDataType.String)),
             SimpleField(name="metadata", type=SearchFieldDataType.String),
             SearchField(
@@ -107,12 +104,9 @@ class SearchService:
         semantic_config = SemanticConfiguration(
             name="my-semantic-config",
             prioritized_fields=SemanticPrioritizedFields(
-                title_field=SemanticField(field_name="title"),
+                title_field=SemanticField(field_name="filename"),
                 content_fields=[
-                    SemanticField(field_name="description")
-                ],
-                keywords_fields=[
-                    SemanticField(field_name="step_number")
+                    SemanticField(field_name="content")
                 ]
             )
         )
@@ -141,54 +135,46 @@ class SearchService:
             logger.error(f"Error generating embedding: {str(e)}")
             raise
     
-    def index_document(self, steps: List[Dict[str, Any]], filename: str, file_url: str):
-        """Index document steps into Azure AI Search"""
-        documents = []
+    def index_document(self, document: Dict[str, Any], filename: str, file_url: str):
+        """Index a single document (entire Excel file) into Azure AI Search"""
         
-        for idx, step in enumerate(steps):
-            # Prepare content for embedding
-            content = f"{step.get('title', '')} {step.get('description', '')}"
-            
-            # Generate embedding
-            try:
-                content_vector = self.generate_embedding(content)
-            except Exception as e:
-                logger.error(f"Failed to generate embedding for step {idx}: {str(e)}")
-                content_vector = [0.0] * 1536  # Fallback empty vector
-            
-            # Extract image URLs
-            image_urls = []
-            for img in step.get('images', []):
-                if 'url' in img:
-                    image_urls.append(img['url'])
-            
-            # Generate URL-safe Base64 encoded ID
-            doc_id = f"{filename}_{idx}"
-            safe_id = base64.urlsafe_b64encode(doc_id.encode('utf-8')).decode('ascii').rstrip('=')
-            
-            doc = {
-                "id": safe_id,
-                "step_number": step.get('step_number', str(idx + 1)),
-                "title": step.get('title', ''),
-                "description": step.get('description', ''),
-                "source_document": filename,
-                "source_url": file_url,
-                "page_number": step.get('metadata', {}).get('page_number'),
-                "image_urls": image_urls,
-                "metadata": json.dumps(step.get('metadata', {})),
-                "content_vector": content_vector
-            }
-            
-            documents.append(doc)
+        # Prepare content for embedding
+        content = document.get('content', '')
         
-        if documents:
-            try:
-                result = self.search_client.upload_documents(documents=documents)
-                logger.info(f"Indexed {len(documents)} documents")
-                return result
-            except Exception as e:
-                logger.error(f"Error indexing documents: {str(e)}")
-                raise
+        # Generate embedding for the combined content
+        try:
+            content_vector = self.generate_embedding(content)
+        except Exception as e:
+            logger.error(f"Failed to generate embedding for document {filename}: {str(e)}")
+            content_vector = [0.0] * 1536  # Fallback empty vector
+        
+        # Extract image URLs
+        image_urls = []
+        for img in document.get('images', []):
+            if 'url' in img:
+                image_urls.append(img['url'])
+        
+        # Generate URL-safe Base64 encoded ID
+        doc_id = filename
+        safe_id = base64.urlsafe_b64encode(doc_id.encode('utf-8')).decode('ascii').rstrip('=')
+        
+        doc = {
+            "id": safe_id,
+            "filename": filename,
+            "content": content,
+            "source_url": file_url,
+            "image_urls": image_urls,
+            "metadata": json.dumps(document.get('metadata', {})),
+            "content_vector": content_vector
+        }
+        
+        try:
+            result = self.search_client.upload_documents(documents=[doc])
+            logger.info(f"Indexed document: {filename}")
+            return result
+        except Exception as e:
+            logger.error(f"Error indexing document: {str(e)}")
+            raise
     
     def hybrid_search(
         self,
@@ -210,8 +196,7 @@ class SearchService:
                     "fields": "content_vector",
                     "k": top_k * 2  # Get more candidates for semantic reranking
                 }],
-                select=["id", "step_number", "title", "description", "source_document", 
-                       "source_url", "page_number", "image_urls", "metadata"],
+                select=["id", "filename", "content", "source_url", "image_urls", "metadata"],
                 query_type="semantic",
                 semantic_configuration_name="my-semantic-config",
                 top=top_k
@@ -219,15 +204,27 @@ class SearchService:
             
             search_results = []
             for result in results:
+                # Extract content and create summary
+                content = result.get("content", "")
+                # Create a summary (first 500 characters)
+                summary = content[:500] if content else ""
+                
+                # Parse metadata
+                metadata = {}
+                try:
+                    metadata = json.loads(result.get("metadata", "{}"))
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse metadata: {str(e)}")
+                
                 search_result = {
-                    "step_number": result.get("step_number", ""),
-                    "title": result.get("title", ""),
-                    "summary": result.get("description", "")[:500],  # Limit summary length
+                    "step_number": "1",  # Single document per file (no chunking)
+                    "title": result.get("filename", ""),
+                    "summary": summary,
                     "images": result.get("image_urls", []) if include_images else [],
-                    "source_document": result.get("source_document", ""),
+                    "source_document": result.get("filename", ""),
                     "source_url": result.get("source_url", ""),
                     "score": result.get("@search.score", 0.0),
-                    "page_number": result.get("page_number")
+                    "page_number": metadata.get("sheet_count", 1)
                 }
                 search_results.append(search_result)
             
