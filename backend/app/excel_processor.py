@@ -1,6 +1,5 @@
 import io
 import os
-import tempfile
 import base64
 from typing import List, Dict, Any, Tuple
 from openpyxl import load_workbook
@@ -18,14 +17,11 @@ class ExcelProcessor:
     def extract_images_from_excel(file_content: bytes, filename: str) -> List[Dict[str, Any]]:
         """Extract all images from an Excel file"""
         images = []
-        tmp_path = None
         
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-                tmp_file.write(file_content)
-                tmp_path = tmp_file.name
-            
-            workbook = load_workbook(tmp_path)
+            # Use BytesIO to load the Excel file directly from bytes
+            file_stream = io.BytesIO(file_content)
+            workbook = load_workbook(file_stream)
             
             for sheet_idx, sheet in enumerate(workbook.worksheets):
                 if hasattr(sheet, '_images'):
@@ -66,28 +62,21 @@ class ExcelProcessor:
                         except Exception as e:
                             logger.warning(f"Error extracting image {img_idx} from sheet {sheet.title}: {str(e)}")
             
-            if tmp_path:
-                os.unlink(tmp_path)
             return images
             
         except Exception as e:
             logger.error(f"Error processing Excel file {filename}: {str(e)}")
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
             raise
     
     @staticmethod
     def extract_text_from_excel(file_content: bytes) -> List[Dict[str, Any]]:
         """Extract text content from Excel sheets with row numbers"""
         sheets_data = []
-        tmp_path = None
         
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-                tmp_file.write(file_content)
-                tmp_path = tmp_file.name
-            
-            workbook = load_workbook(tmp_path, data_only=True)
+            # Use BytesIO to load the Excel file directly from bytes
+            file_stream = io.BytesIO(file_content)
+            workbook = load_workbook(file_stream, data_only=True)
             
             for sheet_idx, sheet in enumerate(workbook.worksheets):
                 rows_data = []
@@ -106,12 +95,8 @@ class ExcelProcessor:
                     'rows': rows_data
                 })
             
-            if tmp_path:
-                os.unlink(tmp_path)
             return sheets_data
             
         except Exception as e:
             logger.error(f"Error extracting text from Excel: {str(e)}")
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
             raise

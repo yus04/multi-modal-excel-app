@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from openai import AzureOpenAI
 import logging
 
@@ -106,7 +106,9 @@ class MultiModalLLMService:
                     if key in images_by_position:
                         for img in images_by_position[key]:
                             description = img.get('description', '[画像]')
-                            combined_parts.append(f"[画像: {description}]\n")
+                            img_filename = img.get('filename', '')
+                            # Add filename after the description
+                            combined_parts.append(f"[画像: {description}] ({img_filename})\n")
                 
                 # Add text content
                 row_text = " | ".join([str(val) for val in row_values if str(val).strip()])
@@ -121,7 +123,8 @@ class MultiModalLLMService:
         self,
         text_content: List[Dict[str, Any]],
         images: List[Dict[str, Any]],
-        filename: str
+        filename: str,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
     ) -> Dict[str, Any]:
         """
         Structure Excel document into a single document with merged content
@@ -133,20 +136,30 @@ class MultiModalLLMService:
         
         # Generate descriptions for all images
         images_with_descriptions = []
-        for img in images:
+        total_images = len(images)
+        
+        for idx, img in enumerate(images):
             try:
                 img_base64 = img.get('data', '')
                 if img_base64:
+                    # Report progress
+                    if progress_callback:
+                        progress_callback(idx, total_images, f"画像 {idx + 1}/{total_images} の説明を生成中...")
+                    
                     description = self.describe_image(img_base64)
                     img_copy = img.copy()
                     img_copy['description'] = description
                     images_with_descriptions.append(img_copy)
-                    logger.info(f"Generated description for image {img.get('filename')}")
+                    logger.info(f"Generated description for image {img.get('filename')} ({idx + 1}/{total_images})")
             except Exception as e:
                 logger.error(f"Error describing image {img.get('filename')}: {str(e)}")
                 img_copy = img.copy()
                 img_copy['description'] = '[画像の説明を生成できませんでした]'
                 images_with_descriptions.append(img_copy)
+        
+        # Report embedding generation progress
+        if progress_callback:
+            progress_callback(total_images, total_images, "テキストの埋め込みを生成中...")
         
         # Merge text and image descriptions
         combined_content = self.merge_text_and_image_descriptions(

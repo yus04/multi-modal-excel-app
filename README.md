@@ -64,10 +64,13 @@
   - ベクトル検索 (セマンティック類似性)
   - キーワード検索 (全文検索)
   - セマンティックランキング (結果の再ランク)
+- **AI回答生成**
+  - LLMによる質問への回答生成
+  - 必要な情報のみを抽出
+  - 関連画像の自動選択
 - **検索結果表示**
-  - 手順番号とタイトル
-  - 要約 (最大500文字)
-  - 関連画像
+  - 質問に対する回答テキスト
+  - 関連画像のみ表示
   - 出典ファイルへのリンク
   - 関連度スコア
 
@@ -187,9 +190,8 @@ npm run dev
    - 例: 「組み立て手順」「品質チェック」「安全確認」
 2. 「検索」ボタンをクリック
 3. 検索結果を確認:
-   - 手順番号とタイトル
-   - 詳細説明
-   - 関連画像
+   - 質問に対する回答テキスト
+   - 関連画像のみ表示
    - 出典ファイルへのリンク
 
 ### 3. 検索結果の活用
@@ -238,14 +240,11 @@ file: Excel ファイル (.xlsx, .xls)
   "query": "組み立て手順",
   "results": [
     {
-      "step_number": "1",
-      "title": "部品の準備",
-      "summary": "必要な部品を準備します...",
+      "answer": "必要な部品を準備します。部品A、部品B、部品Cを用意してください...",
       "images": ["https://..."],
       "source_document": "example.xlsx",
       "source_url": "https://...",
-      "score": 0.95,
-      "page_number": 1
+      "score": 0.95
     }
   ],
   "total_results": 1
@@ -318,9 +317,12 @@ Hybrid Search (Vector + Keyword)
     ↓
 Semantic Re-ranking
     ↓
-Fetch Images from Blob Storage
+Extract Relevant Information with LLM
+    - 質問に関連する文章を抽出
+    - 関連する画像のみを選択
+    - 回答テキストを生成
     ↓
-Return Results with Images & References
+Return Results with Selected Images & References
 ```
 
 ## 🛠️ 開発
