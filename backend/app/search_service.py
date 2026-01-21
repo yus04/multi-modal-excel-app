@@ -213,11 +213,11 @@ class SearchService:
                 metadata = {}
                 try:
                     metadata = json.loads(result.get("metadata", "{}"))
-                except:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse metadata: {str(e)}")
                 
                 search_result = {
-                    "step_number": "1",  # Single document per file
+                    "step_number": "1",  # Single document per file (no chunking)
                     "title": result.get("filename", ""),
                     "summary": summary,
                     "images": result.get("image_urls", []) if include_images else [],

@@ -61,7 +61,8 @@ class MultiModalLLMService:
             
         except Exception as e:
             logger.error(f"Error generating image description: {str(e)}")
-            return "[画像の説明を生成できませんでした]"
+            # Return a fallback message indicating the failure
+            return f"[画像の説明を生成できませんでした: {type(e).__name__}]"
     
     def merge_text_and_image_descriptions(
         self,
