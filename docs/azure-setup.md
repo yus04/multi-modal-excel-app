@@ -15,7 +15,7 @@
 1. Azure OpenAI Service
 2. Azure AI Search
 3. Azure Blob Storage
-4. Azure Document Intelligence（オプション）
+4. Azure AI Content Understanding
 
 ## 1. Azure OpenAI Service のセットアップ
 
@@ -114,25 +114,21 @@
 1. 「アクセスキー」に移動
 2. 「接続文字列」をコピー
 
-## 4. Azure Document Intelligence のセットアップ（オプション）
+## 4. Azure AI Content Understanding のセットアップ
 
-### サービスの作成
+Azure AI Content Understanding は Azure OpenAI Service のマルチモーダル機能を使用します。
+既に Azure OpenAI Service をセットアップ済みの場合、追加の設定は不要です。
 
-1. Azure Portal で「リソースの作成」
-2. 「Document Intelligence」を検索
-3. 以下の情報を入力：
-   - サブスクリプション：使用するサブスクリプション
-   - リソースグループ：既存のグループを選択
-   - 地域：他のリソースと同じリージョン
-   - 名前：一意の名前（例：`excel-search-di`）
-   - 価格レベル：Free F0 または Standard S0
+### 特徴
 
-### 資格情報の取得
+- スキーマベースのフィールド抽出
+- Excel 構造の自動解析
+- マルチモーダル AI を使用したコンテンツ理解
 
-1. リソースの「キーとエンドポイント」に移動
-2. 以下の情報をメモ：
-   - エンドポイント：`https://your-di-resource.cognitiveservices.azure.com/`
-   - キー 1：API キー
+### 設定方法
+
+Azure OpenAI Service のエンドポイントと API キーを使用します。
+環境変数で同じ資格情報を設定します。
 
 ## 5. 環境変数の設定
 
@@ -161,9 +157,9 @@ AZURE_SEARCH_INDEX_NAME=excel-procedures-index
 AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 AZURE_STORAGE_CONTAINER_NAME=excel-files
 
-# Azure Document Intelligence Configuration (Optional)
-AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://your-di-resource.cognitiveservices.azure.com/
-AZURE_DOCUMENT_INTELLIGENCE_API_KEY=your-di-api-key
+# Azure AI Content Understanding Configuration
+AZURE_CONTENT_UNDERSTANDING_ENDPOINT=https://your-openai-resource.openai.azure.com/
+AZURE_CONTENT_UNDERSTANDING_API_KEY=your-content-understanding-api-key
 
 # Application Configuration
 ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
@@ -240,13 +236,13 @@ openai_key = client.get_secret("openai-api-key").value
    - Azure OpenAI：従量課金
    - AI Search：Basic
    - Blob Storage：Standard LRS
-   - Document Intelligence：Free F0
+   - Content Understanding：Azure OpenAI に含まれる
 
 2. **本番環境**
    - Azure OpenAI：予約容量の検討
    - AI Search：Standard（自動スケーリング有効）
    - Blob Storage：Standard GRS（冗長性向上）
-   - Document Intelligence：Standard S0
+   - Content Understanding：Azure OpenAI に含まれる
 
 ### コスト監視
 

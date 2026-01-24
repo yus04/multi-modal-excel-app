@@ -1,0 +1,317 @@
+"""
+Azure AI Content Understanding Service
+ユーザー定義のスキーマに基づいてExcelファイルからフィールドを抽出
+"""
+import logging
+from typing import List, Dict, Any, Optional
+from openai import AzureOpenAI
+import json
+
+logger = logging.getLogger(__name__)
+
+
+class ContentUnderstandingService:
+    """Azure AI Content Understanding を使用してドキュメントからフィールドを抽出"""
+    
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        deployment_name: str,
+        api_version: str
+    ):
+        """
+        Initialize Content Understanding Service
+        
+        Args:
+            endpoint: Azure OpenAI endpoint
+            api_key: Azure OpenAI API key
+            deployment_name: Deployment name (GPT-4o or similar multimodal model)
+            api_version: API version
+        """
+        self.client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version=api_version
+        )
+        self.deployment_name = deployment_name
+        logger.info(f"ContentUnderstandingService initialized with deployment: {deployment_name}")
+    
+    def extract_fields_from_excel(
+        self,
+        text_content: List[Dict[str, Any]],
+        images: List[Dict[str, Any]],
+        schema: Dict[str, Any],
+        filename: str
+    ) -> Dict[str, Any]:
+        """
+        スキーマに基づいてExcelファイルからフィールドを抽出
+        
+        Args:
+            text_content: Excelシートのテキストコンテンツ
+            images: 抽出された画像リスト（base64エンコード済み）
+            schema: フィールド定義を含むスキーマ
+            filename: ファイル名
+        
+        Returns:
+            抽出されたフィールドを含む辞書
+        """
+        logger.info(f"Extracting fields from {filename} using schema: {schema.get('name', 'Unknown')}")
+        
+        # スキーマからフィールド定義を取得
+        field_definitions = schema.get('fields', [])
+        if not field_definitions:
+            logger.warning("No field definitions found in schema")
+            return {}
+        
+        # テキストコンテンツをまとめる
+        text_summary = self._prepare_text_summary(text_content)
+        
+        # 画像情報をまとめる（最初の数枚のみ）
+        image_summary = self._prepare_image_summary(images)
+        
+        # システムプロンプトを構築
+        system_prompt = self._build_system_prompt(field_definitions)
+        
+        # ユーザープロンプトを構築
+        user_prompt = self._build_user_prompt(filename, text_summary, image_summary, field_definitions)
+        
+        # 画像がある場合はマルチモーダルリクエストを送信
+        if images:
+            extracted_fields = self._extract_with_images(
+                system_prompt,
+                user_prompt,
+                images[:5],  # 最初の5枚の画像のみ使用
+                field_definitions
+            )
+        else:
+            extracted_fields = self._extract_text_only(
+                system_prompt,
+                user_prompt,
+                field_definitions
+            )
+        
+        logger.info(f"Successfully extracted {len(extracted_fields)} fields")
+        return extracted_fields
+    
+    def _build_system_prompt(self, field_definitions: List[Dict[str, Any]]) -> str:
+        """システムプロンプトを構築"""
+        field_descriptions = []
+        for field in field_definitions:
+            field_name = field.get('name', '')
+            field_type = field.get('data_type', 'text')
+            description = field.get('description', '')
+            
+            if field_type == 'table':
+                # Table type field with sub-fields
+                sub_fields = field.get('sub_fields', [])
+                sub_field_names = ', '.join([sf.get('name', '') for sf in sub_fields])
+                field_descriptions.append(
+                    f"- {field_name} (table): {description}\n  サブフィールド: [{sub_field_names}] - 複数行のデータを配列として抽出"
+                )
+            else:
+                field_descriptions.append(
+                    f"- {field_name} ({field_type}): {description}"
+                )
+        
+        fields_text = "\n".join(field_descriptions)
+        
+        return f"""あなたはExcelファイルから構造化データを抽出する専門家です。
+ユーザーが定義したスキーマに基づいて、Excelファイルのテキストと画像から必要なフィールドを抽出してください。
+
+【抽出対象フィールド】
+{fields_text}
+
+【重要な指示】
+1. Excelファイルの内容を注意深く分析してください
+2. スキーマで定義された各フィールドに対応する値を探してください
+3. 明確に記載されている情報のみを抽出してください
+4. 推測や想像で値を埋めないでください
+5. 値が見つからない場合は null を返してください
+6. 日付フィールドは ISO 8601 形式（YYYY-MM-DD）で返してください
+7. 数値フィールドは数値型で返してください
+8. テキストフィールドは文字列で返してください
+9. **テーブル型フィールドは配列として返してください** - Excelの表構造（縦に並んだ複数行）を検出し、各行を配列の要素として抽出
+10. テーブルの各行は、定義されたサブフィールドを含むオブジェクトとして返してください
+
+JSON形式で結果を返してください。各フィールド名をキーとして、抽出された値を値として設定してください。
+
+【テーブル型の例】
+入力: 工程番号、工程名、実施詳細が表形式で縦に3行ある
+出力: {{"工程一覧": [{{"工程番号": "1", "工程名": "電源投入", "実施詳細": "..."}}, {{"工程番号": "2", "工程名": "材料セット", "実施詳細": "..."}}, {{"工程番号": "3", ...}}]}}"""
+
+    
+    def _build_user_prompt(
+        self,
+        filename: str,
+        text_summary: str,
+        image_summary: str,
+        field_definitions: List[Dict[str, Any]]
+    ) -> str:
+        """ユーザープロンプトを構築"""
+        field_names = [field.get('name', '') for field in field_definitions]
+        fields_list = ", ".join(field_names)
+        
+        return f"""以下のExcelファイル「{filename}」から、指定されたフィールドを抽出してください。
+
+【Excelファイルのテキスト内容】
+{text_summary}
+
+【画像情報】
+{image_summary}
+
+【抽出するフィールド】
+{fields_list}
+
+上記のフィールドに対応する値を、Excelファイルの内容から抽出し、JSON形式で返してください。
+例: {{"field1": "value1", "field2": 123, "field3": null}}"""
+    
+    def _prepare_text_summary(self, text_content: List[Dict[str, Any]]) -> str:
+        """テキストコンテンツのサマリーを準備"""
+        if not text_content:
+            return "テキストコンテンツなし"
+        
+        summary_parts = []
+        for sheet in text_content[:3]:  # 最初の3シートのみ
+            sheet_name = sheet.get('sheet_name', 'Unknown')
+            rows = sheet.get('rows', [])
+            summary_parts.append(f"\n【シート: {sheet_name}】")
+            
+            for row in rows[:100]:  # 最初の100行のみ
+                row_num = row.get('row_number', '')
+                row_values = row.get('values', [])
+                row_text = " | ".join([str(val) for val in row_values if str(val).strip()])
+                if row_text:
+                    summary_parts.append(f"行{row_num}: {row_text}")
+        
+        full_summary = "\n".join(summary_parts)
+        # 最大15000文字に制限
+        if len(full_summary) > 15000:
+            return full_summary[:15000] + "\n... (省略)"
+        return full_summary
+    
+    def _prepare_image_summary(self, images: List[Dict[str, Any]]) -> str:
+        """画像情報のサマリーを準備"""
+        if not images:
+            return "画像なし"
+        
+        summary_parts = [f"画像数: {len(images)}"]
+        for i, img in enumerate(images[:5]):  # 最初の5枚のみ
+            sheet = img.get('sheet', 'Unknown')
+            position = img.get('position', {})
+            if position:
+                pos_str = f"列{position.get('col', '?')}, 行{position.get('row', '?')}"
+            else:
+                pos_str = "位置不明"
+            summary_parts.append(f"画像{i+1}: シート「{sheet}」, {pos_str}")
+        
+        if len(images) > 5:
+            summary_parts.append(f"... 他 {len(images) - 5} 枚")
+        
+        return "\n".join(summary_parts)
+    
+    def _extract_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        images: List[Dict[str, Any]],
+        field_definitions: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """画像を含むマルチモーダルリクエストでフィールドを抽出"""
+        try:
+            # ユーザーコンテンツを構築（テキスト + 画像）
+            user_content = [{"type": "text", "text": user_prompt}]
+            
+            # 画像を追加
+            for img in images:
+                img_base64 = img.get('data', '')
+                if img_base64:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{img_base64}",
+                            "detail": "high"
+                        }
+                    })
+            
+            response = self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.1,
+                max_tokens=4000,
+                response_format={"type": "json_object"}
+            )
+            
+            result_text = response.choices[0].message.content
+            extracted_fields = json.loads(result_text)
+            
+            logger.info("Successfully extracted fields with multimodal request")
+            return extracted_fields
+            
+        except Exception as e:
+            logger.error(f"Error extracting fields with images: {str(e)}")
+            # フォールバック: テキストのみで再試行
+            return self._extract_text_only(system_prompt, user_prompt, field_definitions)
+    
+    def _extract_text_only(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        field_definitions: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """テキストのみでフィールドを抽出"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=4000,
+                response_format={"type": "json_object"}
+            )
+            
+            result_text = response.choices[0].message.content
+            extracted_fields = json.loads(result_text)
+            
+            logger.info("Successfully extracted fields with text-only request")
+            return extracted_fields
+            
+        except Exception as e:
+            logger.error(f"Error extracting fields: {str(e)}")
+            # フォールバック: 空の結果を返す
+            return {field.get('name', ''): None for field in field_definitions}
+    
+    def describe_image(self, image_base64: str) -> str:
+        """画像の説明を生成（既存のLLMサービスとの互換性のため）"""
+        try:
+            system_prompt = """あなたは製造業の作業標準書に含まれる画像を説明する専門家です。
+画像の内容を日本語で詳細に説明してください。"""
+            
+            user_content = [
+                {"type": "text", "text": "この画像の内容を詳細に説明してください。"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+                }
+            ]
+            
+            response = self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.1,
+                max_tokens=500
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"Error generating image description: {str(e)}")
+            return f"[画像の説明を生成できませんでした: {type(e).__name__}]"

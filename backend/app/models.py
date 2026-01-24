@@ -7,6 +7,7 @@ class FieldDataType(str, Enum):
     """Field data types"""
     TEXT = "text"
     IMAGE = "image"
+    TABLE = "table"
 
 
 class FieldDefinition(BaseModel):
@@ -14,6 +15,10 @@ class FieldDefinition(BaseModel):
     name: str
     data_type: FieldDataType
     description: Optional[str] = None
+    sub_fields: Optional[List['FieldDefinition']] = None  # For table type
+
+# Enable forward reference for recursive model
+FieldDefinition.model_rebuild()
 
 
 class ExcelSchema(BaseModel):
@@ -60,6 +65,7 @@ class SearchRequest(BaseModel):
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
     include_images: bool = True
+    schema_id: Optional[str] = None  # If provided, searches in schema-specific index
 
 
 class SearchResponse(BaseModel):

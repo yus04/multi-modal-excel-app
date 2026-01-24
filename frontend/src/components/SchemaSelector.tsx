@@ -53,8 +53,22 @@ const SchemaSelector: React.FC<SchemaSelectorProps> = ({
                 <li key={idx}>
                   {field.name} 
                   <span className="field-type">
-                    ({field.data_type === 'text' ? 'テキスト' : '画像'})
+                    ({field.data_type === 'text' ? 'テキスト' : 
+                      field.data_type === 'image' ? '画像' : 
+                      field.data_type === 'table' ? 'テーブル' : field.data_type})
                   </span>
+                  {field.data_type === 'table' && field.sub_fields && field.sub_fields.length > 0 && (
+                    <ul className="sub-fields-list">
+                      {field.sub_fields.map((subField, subIdx) => (
+                        <li key={subIdx} className="sub-field-item">
+                          {subField.name}
+                          <span className="sub-field-type">
+                            ({subField.data_type === 'text' ? 'テキスト' : '画像'})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               ))}
             </ul>

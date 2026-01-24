@@ -40,6 +40,7 @@ class SearchService:
     ):
         self.credential = AzureKeyCredential(search_api_key)
         self.index_name = index_name
+        self.search_endpoint = search_endpoint
         self.search_client = SearchClient(
             endpoint=search_endpoint,
             index_name=index_name,
@@ -59,16 +60,157 @@ class SearchService:
         self.embedding_model = openai_embedding_deployment
         self.chat_model = openai_deployment
         
-        self._ensure_index_exists()
+        # Track schema-based indexes
+        self.schema_indexes = {}  # Maps schema_id to index_name
+        
+        # Cache for field name translations (to avoid redundant AI calls)
+        self.field_name_cache = {}  # Maps original field name to English field name
+        
+        # Track if default index has been checked
+        self._default_index_checked = False
     
-    def _ensure_index_exists(self):
-        """Create search index if it doesn't exist"""
+    def _ensure_default_index_exists(self):
+        """Create default search index if it doesn't exist (lazy initialization)"""
+        if self._default_index_checked:
+            return
+        
         try:
             self.index_client.get_index(self.index_name)
-            logger.info(f"Index {self.index_name} already exists")
+            logger.info(f"Default index '{self.index_name}' already exists")
         except Exception:
-            logger.info(f"Creating index {self.index_name}")
+            logger.info(f"Creating default index '{self.index_name}' (first use)")
             self._create_index()
+        
+        self._default_index_checked = True
+    
+    def _get_schema_index_name(self, schema_id: str) -> str:
+        """Get the index name for a specific schema"""
+        # Sanitize schema_id for use in index name
+        safe_schema_id = schema_id.replace('-', '').replace('_', '')[:20]
+        return f"{self.index_name}-schema-{safe_schema_id}".lower()
+    
+    def _translate_field_name_to_english(self, field_name: str, field_description: str = None) -> str:
+        """Translate field name to English using AI and sanitize for Azure Search
+        
+        Uses GPT to translate Japanese (or other language) field names to 
+        meaningful English field names that comply with Azure AI Search requirements.
+        
+        Args:
+            field_name: Original field name (e.g., "作業名")
+            field_description: Optional field description for context
+            
+        Returns:
+            English field name in snake_case (e.g., "work_name")
+            
+        Examples:
+            "作業名" -> "work_name"
+            "管理番号" -> "management_number"
+            "準備物" -> "preparation_items"
+            "手顺1" -> "step_1"
+        """
+        # Check cache first
+        cache_key = f"{field_name}:{field_description or ''}"
+        if cache_key in self.field_name_cache:
+            logger.debug(f"Using cached field name: '{field_name}' -> '{self.field_name_cache[cache_key]}'")
+            return self.field_name_cache[cache_key]
+        
+        # If already in English (ASCII only), just sanitize
+        if field_name.isascii():
+            sanitized = self._sanitize_ascii_field_name(field_name)
+            self.field_name_cache[cache_key] = sanitized
+            return sanitized
+        
+        try:
+            # Build prompt for AI translation
+            context = f" (Description: {field_description})" if field_description else ""
+            
+            prompt = f"""Convert the following field name to a valid English field name for a database.
+
+Field name: {field_name}{context}
+
+Requirements:
+1. Use English only (ASCII characters)
+2. Use snake_case format (lowercase with underscores)
+3. Start with a letter (a-z)
+4. Use only letters, numbers, and underscores
+5. Be descriptive and concise (max 50 characters)
+6. If it's a numbered field (like "手顺1"), include the number (e.g., "step_1")
+
+Examples:
+- "作業名" -> "work_name"
+- "管理番号" -> "management_number"
+- "準備物" -> "preparation_items"
+- "手顺1" -> "step_1"
+- "手顺1の画像" -> "step_1_image"
+- "注意事項" -> "precautions"
+
+Respond with ONLY the English field name, nothing else."""
+
+            response = self.openai_client.chat.completions.create(
+                model=self.chat_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert at translating field names to English database-friendly names. Respond with only the field name, no explanations."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=50
+            )
+            
+            english_name = response.choices[0].message.content.strip()
+            
+            # Additional sanitization to ensure Azure Search compliance
+            sanitized = self._sanitize_ascii_field_name(english_name)
+            
+            # Cache the result
+            self.field_name_cache[cache_key] = sanitized
+            
+            logger.info(f"Translated field name: '{field_name}' -> '{sanitized}'")
+            return sanitized
+            
+        except Exception as e:
+            logger.error(f"Error translating field name '{field_name}': {str(e)}")
+            # Fallback: use a safe default
+            fallback = f"field_{hash(field_name) % 10000}"
+            self.field_name_cache[cache_key] = fallback
+            return fallback
+    
+    def _sanitize_ascii_field_name(self, field_name: str) -> str:
+        """Sanitize ASCII field name for Azure AI Search
+        
+        Azure AI Search field names must:
+        1. Begin with a letter (a-z, A-Z)
+        2. Contain only ASCII letters, digits, or underscore
+        3. Be unique within the index
+        
+        Args:
+            field_name: ASCII field name
+            
+        Returns:
+            Sanitized field name
+        """
+        import re
+        
+        # Convert to lowercase
+        sanitized = field_name.lower()
+        
+        # Replace any non-alphanumeric characters (except underscore) with underscore
+        sanitized = re.sub(r'[^a-z0-9_]', '_', sanitized)
+        
+        # Remove consecutive underscores
+        sanitized = re.sub(r'_+', '_', sanitized)
+        
+        # Remove leading/trailing underscores
+        sanitized = sanitized.strip('_')
+        
+        # Ensure it starts with a letter
+        if not sanitized or not sanitized[0].isalpha():
+            sanitized = f"field_{sanitized}" if sanitized else "field"
+        
+        # Ensure it's not too long (Azure limit is 128 chars, leave room for _vector)
+        if len(sanitized) > 100:
+            sanitized = sanitized[:100]
+        
+        return sanitized
     
     def _create_index(self):
         """Create Azure AI Search index with vector and semantic search"""
@@ -123,6 +265,146 @@ class SearchService:
         
         self.index_client.create_index(index)
         logger.info(f"Created index {self.index_name}")
+    
+    def create_schema_based_index(self, schema):
+        """
+        Create a dynamic index based on user-defined schema
+        
+        For each field in the schema:
+        - Creates a searchable text field (field_name)
+        - Creates a vector field (field_name_vector)
+        
+        Args:
+            schema: ExcelSchema object with field definitions
+        """
+        from app.models import FieldDataType
+        
+        schema_index_name = self._get_schema_index_name(schema.id)
+        
+        # Check if index already exists
+        try:
+            self.index_client.get_index(schema_index_name)
+            logger.info(f"Schema-based index {schema_index_name} already exists")
+            self.schema_indexes[schema.id] = schema_index_name
+            return schema_index_name
+        except Exception:
+            logger.info(f"Creating schema-based index {schema_index_name}")
+        
+        # Build field list
+        fields = [
+            SimpleField(name="id", type=SearchFieldDataType.String, key=True),
+            SearchableField(name="filename", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="source_url", type=SearchFieldDataType.String),
+            SimpleField(name="schema_id", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="schema_name", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="metadata", type=SearchFieldDataType.String),
+        ]
+        
+        # Add user-defined fields from schema
+        vector_profile_name = "myHnswProfile"
+        semantic_content_fields = []
+        
+        # Helper function to process fields recursively (for nested table fields)
+        def add_fields_from_definition(field_def, parent_safe_name=None):
+            field_name = field_def.name
+            # Translate field name to English using AI
+            safe_field_name = self._translate_field_name_to_english(field_name, field_def.description)
+            
+            # If this is a sub-field, prefix with parent name
+            if parent_safe_name:
+                safe_field_name = f"{parent_safe_name}_{safe_field_name}"
+            
+            if field_def.data_type == FieldDataType.TEXT:
+                # Add searchable text field
+                fields.append(
+                    SearchableField(
+                        name=safe_field_name,
+                        type=SearchFieldDataType.String,
+                        searchable=True,
+                        filterable=False,
+                        facetable=False
+                    )
+                )
+                # Add to semantic content fields
+                semantic_content_fields.append(SemanticField(field_name=safe_field_name))
+                
+            elif field_def.data_type == FieldDataType.IMAGE:
+                # For image fields, store the text description
+                fields.append(
+                    SearchableField(
+                        name=safe_field_name,
+                        type=SearchFieldDataType.String,
+                        searchable=True,
+                        filterable=False,
+                        facetable=False
+                    )
+                )
+                semantic_content_fields.append(SemanticField(field_name=safe_field_name))
+                
+            elif field_def.data_type == FieldDataType.TABLE:
+                # For table type, only create fields for sub-fields (flattened)
+                # This allows searching within specific columns of the table
+                # The parent table field itself is not stored to avoid redundancy
+                if field_def.sub_fields:
+                    for sub_field in field_def.sub_fields:
+                        add_fields_from_definition(sub_field, safe_field_name)
+                # Note: No parent field or vector for table type - only sub-fields are indexed
+                return  # Skip adding vector field for table type
+            
+            # Add vector field for this field (not for table type)
+            fields.append(
+                SearchField(
+                    name=f"{safe_field_name}_vector",
+                    type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                    searchable=True,
+                    vector_search_dimensions=1536,
+                    vector_search_profile_name=vector_profile_name
+                )
+            )
+        
+        # Process all top-level fields
+        for field in schema.fields:
+            add_fields_from_definition(field)
+        
+        # Configure vector search
+        vector_search = VectorSearch(
+            profiles=[
+                VectorSearchProfile(
+                    name=vector_profile_name,
+                    algorithm_configuration_name="myHnsw"
+                )
+            ],
+            algorithms=[
+                HnswAlgorithmConfiguration(name="myHnsw")
+            ]
+        )
+        
+        # Configure semantic search
+        semantic_config = SemanticConfiguration(
+            name="my-semantic-config",
+            prioritized_fields=SemanticPrioritizedFields(
+                title_field=SemanticField(field_name="filename"),
+                content_fields=semantic_content_fields
+            )
+        )
+        
+        semantic_search = SemanticSearch(configurations=[semantic_config])
+        
+        # Create the index
+        index = SearchIndex(
+            name=schema_index_name,
+            fields=fields,
+            vector_search=vector_search,
+            semantic_search=semantic_search
+        )
+        
+        self.index_client.create_index(index)
+        logger.info(f"Created schema-based index {schema_index_name} with {len(schema.fields)} user-defined fields")
+        
+        # Track this index
+        self.schema_indexes[schema.id] = schema_index_name
+        
+        return schema_index_name
     
     def _split_text_with_llm(self, text: str, max_chunk_size: int = 6000) -> List[str]:
         """Use LLM (GPT-5.2 with 272K token context) to split text at semantic boundaries
@@ -252,6 +534,9 @@ class SearchService:
     def index_document(self, document: Dict[str, Any], filename: str, file_url: str):
         """Index document by splitting into chunks and indexing each chunk separately"""
         
+        # Ensure default index exists (lazy initialization)
+        self._ensure_default_index_exists()
+        
         # Prepare content for chunking
         content = document.get('content', '')
         
@@ -351,118 +636,201 @@ class SearchService:
         """
         Index document using schema-based field extraction
         
-        For each field in the schema:
-        - Text fields: extract text content (searchable, filterable)
-        - Image fields: extract images and convert to text descriptions using GPT-5.2
-        - Create vector field for each field (field_name_vector)
+        Creates/uses a schema-specific index where each user-defined field gets:
+        - A searchable text field (field_name)
+        - A vector field (field_name_vector)
+        
+        Args:
+            document: Document with content, images, and extracted_fields
+            filename: Name of the file
+            file_url: URL of the source file
+            schema: ExcelSchema object with field definitions
         """
         from app.models import FieldDataType
         
-        logger.info(f"Indexing document with schema: {schema.name}")
+        logger.info(f"Indexing document with schema: {schema.name} (ID: {schema.id})")
         
-        # Prepare base document
-        content = document.get('content', '')
+        # Ensure schema-specific index exists
+        schema_index_name = self.create_schema_based_index(schema)
+        
+        # Create a search client for this schema's index
+        schema_search_client = SearchClient(
+            endpoint=self.search_endpoint,
+            index_name=schema_index_name,
+            credential=self.credential
+        )
+        
+        # Get extracted fields from Content Understanding
+        extracted_fields = document.get('extracted_fields', {})
         all_images = document.get('images', [])
         
-        # Build image mapping
-        image_map = {}
-        for idx, img in enumerate(all_images):
-            if 'url' in img:
-                image_map[idx] = img
+        logger.info(f"Using extracted fields from Content Understanding: {len(extracted_fields)} fields")
         
-        # Extract field-specific data based on schema
+        # Prepare field data and vectors
         field_data = {}
         field_vectors = {}
         
-        for field in schema.fields:
-            field_name = field.name
-            logger.info(f"Processing field: {field_name} (type: {field.data_type})")
+        # Helper function to process fields recursively (for nested table fields)
+        def process_field(field_def, parent_safe_name=None, parent_value=None):
+            field_name = field_def.name
+            # Translate field name to English using AI (will use cache if already translated)
+            safe_field_name = self._translate_field_name_to_english(field_name, field_def.description)
             
-            if field.data_type == FieldDataType.TEXT:
-                # Extract text content for this field
-                # For now, use the full content (in production, you'd use Azure AI Content Understanding)
-                field_content = content
-                field_data[field_name] = field_content
-                
-                # Generate vector for this field
-                try:
-                    vector = self.generate_embedding(field_content)
-                    field_vectors[f"{field_name}_vector"] = vector
-                except Exception as e:
-                    logger.error(f"Error generating embedding for field {field_name}: {str(e)}")
-                    field_vectors[f"{field_name}_vector"] = [0.0] * 1536
+            # If this is a sub-field, prefix with parent name
+            if parent_safe_name:
+                safe_field_name = f"{parent_safe_name}_{safe_field_name}"
             
-            elif field.data_type == FieldDataType.IMAGE:
-                # Extract and describe images using GPT-5.2
-                image_descriptions = []
-                for idx, img in enumerate(all_images):
-                    if 'description' in img:
-                        image_descriptions.append(f"画像{idx + 1}: {img['description']}")
+            logger.info(f"Processing field: {field_name} -> {safe_field_name} (type: {field_def.data_type})")
+            
+            # Get the extracted value for this field
+            if parent_value is not None:
+                # This is a sub-field, use parent_value
+                field_value = parent_value.get(field_name) if isinstance(parent_value, dict) else None
+            else:
+                # Top-level field
+                field_value = extracted_fields.get(field_name)
+            
+            if field_def.data_type == FieldDataType.TABLE:
+                # Handle table type - field_value should be an array
+                if field_value is None or not isinstance(field_value, list):
+                    logger.warning(f"Table field '{field_name}' has no valid array value")
+                else:
+                    logger.info(f"Table field '{field_name}' has {len(field_value)} rows")
+                    
+                    # Process sub-fields: flatten all rows into searchable text fields
+                    # This allows searching within specific columns of the table
+                    if field_def.sub_fields:
+                        for sub_field in field_def.sub_fields:
+                            sub_field_name = sub_field.name
+                            sub_safe_name = self._translate_field_name_to_english(sub_field_name, sub_field.description)
+                            full_sub_safe_name = f"{safe_field_name}_{sub_safe_name}"
+                            
+                            # Collect all values for this sub-field across all rows
+                            sub_field_values = []
+                            for row in field_value:
+                                if isinstance(row, dict) and sub_field_name in row:
+                                    val = row[sub_field_name]
+                                    if val:
+                                        sub_field_values.append(str(val))
+                            
+                            # Join all values with newlines for searchability
+                            sub_field_content = "\n".join(sub_field_values) if sub_field_values else ""
+                            
+                            # Store sub-field data
+                            field_data[full_sub_safe_name] = sub_field_content
+                            
+                            # Generate vector for sub-field
+                            if sub_field_content:
+                                try:
+                                    vector = self.generate_embedding(sub_field_content)
+                                    field_vectors[f"{full_sub_safe_name}_vector"] = vector
+                                except Exception as e:
+                                    logger.error(f"Error generating embedding for sub-field {full_sub_safe_name}: {str(e)}")
+                                    field_vectors[f"{full_sub_safe_name}_vector"] = [0.0] * 1536
+                            else:
+                                field_vectors[f"{full_sub_safe_name}_vector"] = [0.0] * 1536
                 
-                field_content = "\n".join(image_descriptions) if image_descriptions else ""
-                field_data[field_name] = field_content
+                # Note: Table field itself is NOT stored - only sub-fields are indexed
+                # This avoids redundancy since all data is available through sub-fields
+                    
+            else:
+                # Handle TEXT and IMAGE types
+                if field_value is None or (isinstance(field_value, str) and not field_value.strip()):
+                    field_content = ""
+                    logger.warning(f"Field '{field_name}' has no extracted value")
+                else:
+                    field_content = str(field_value)
+                    logger.info(f"Field '{field_name}' has value: {field_content[:100]}...")
+                
+                # Store field data
+                field_data[safe_field_name] = field_content
                 
                 # Generate vector for this field
                 if field_content:
                     try:
                         vector = self.generate_embedding(field_content)
-                        field_vectors[f"{field_name}_vector"] = vector
+                        field_vectors[f"{safe_field_name}_vector"] = vector
+                        logger.debug(f"Generated embedding for {safe_field_name} ({len(field_content)} chars)")
                     except Exception as e:
-                        logger.error(f"Error generating embedding for field {field_name}: {str(e)}")
-                        field_vectors[f"{field_name}_vector"] = [0.0] * 1536
+                        logger.error(f"Error generating embedding for field {safe_field_name}: {str(e)}")
+                        field_vectors[f"{safe_field_name}_vector"] = [0.0] * 1536
                 else:
-                    field_vectors[f"{field_name}_vector"] = [0.0] * 1536
+                    field_vectors[f"{safe_field_name}_vector"] = [0.0] * 1536
+        
+        # Process all top-level fields
+        for field in schema.fields:
+            process_field(field)
         
         # Create search document with schema fields
-        # Note: This is a simplified version. In production, you would:
-        # 1. Create/update the index schema dynamically to include these fields
-        # 2. Use Azure AI Content Understanding for better text extraction
-        # 3. Process each field more intelligently based on Excel structure
-        
-        # For now, store field data in metadata and use the standard index structure
         doc_id = filename
         safe_id = base64.urlsafe_b64encode(doc_id.encode('utf-8')).decode('ascii').rstrip('=')
         
-        # Combine all field content for main content field
-        combined_content = "\n\n".join([
-            f"[{field.name}]\n{field_data.get(field.name, '')}"
-            for field in schema.fields
-        ])
-        
-        # Collect all image URLs
-        image_urls = [img['url'] for img in all_images if 'url' in img]
-        
-        # Generate embedding for combined content
-        try:
-            content_vector = self.generate_embedding(combined_content)
-        except Exception as e:
-            logger.error(f"Failed to generate embedding: {str(e)}")
-            content_vector = [0.0] * 1536
-        
-        # Store schema info and field data in metadata
-        metadata = document.get('metadata', {}).copy()
-        metadata['schema_id'] = schema.id
-        metadata['schema_name'] = schema.name
-        metadata['field_data'] = field_data
-        metadata['has_schema'] = True
-        
+        # Build the document
         doc = {
             "id": safe_id,
             "filename": filename,
-            "content": combined_content,
             "source_url": file_url,
-            "image_urls": image_urls,
-            "metadata": json.dumps(metadata),
-            "content_vector": content_vector
+            "schema_id": schema.id,
+            "schema_name": schema.name,
+            "metadata": json.dumps({
+                "upload_date": document.get('metadata', {}).get('upload_date', ''),
+                "image_count": len(all_images),
+                "field_count": len(schema.fields),
+                "extracted_field_count": len(extracted_fields)
+            })
         }
         
+        # Add all field data and vectors
+        doc.update(field_data)
+        doc.update(field_vectors)
+        
+        # Index the document
         try:
-            result = self.search_client.upload_documents(documents=[doc])
-            logger.info(f"Indexed document with schema: {filename} (schema: {schema.name})")
+            result = schema_search_client.upload_documents(documents=[doc])
+            logger.info(f"Successfully indexed document '{filename}' in schema-based index '{schema_index_name}'")
+            logger.info(f"Document has {len(field_data)} fields with {len(field_vectors)} vector fields")
             return result
         except Exception as e:
             logger.error(f"Error indexing document with schema: {str(e)}")
             raise
+    
+    def _extract_field_content(self, full_content: str, field) -> str:
+        """
+        Extract content for a specific field from the full document content
+        
+        This is a placeholder implementation. In production, you would:
+        1. Use Azure AI Content Understanding to analyze Excel structure
+        2. Match field definitions to actual Excel columns/sections
+        3. Extract only the relevant content for each field
+        
+        For now, we use a simple heuristic:
+        - Look for field name in the content
+        - Extract surrounding text
+        """
+        field_name = field.name
+        
+        # Simple heuristic: find field name mentions and extract context
+        lines = full_content.split('\\n')
+        relevant_lines = []
+        
+        for i, line in enumerate(lines):
+            # Check if field name or description appears in the line
+            if field_name.lower() in line.lower() or (field.description and field.description.lower() in line.lower()):
+                # Include some context lines
+                start = max(0, i - 2)
+                end = min(len(lines), i + 10)
+                relevant_lines.extend(lines[start:end])
+        
+        if relevant_lines:
+            extracted = '\\n'.join(relevant_lines)
+            logger.debug(f"Extracted {len(extracted)} chars for field '{field_name}'")
+            return extracted
+        
+        # Fallback: if field name not found, distribute content among fields
+        # This is a simple fallback - divide content among all fields
+        # In production, you would use AI to properly segment the content
+        logger.warning(f"Could not find specific content for field '{field_name}', using full content")
+        return full_content
     
     def _determine_relevant_fields(self, query: str, schema) -> List[str]:
         """
@@ -532,14 +900,165 @@ class SearchService:
         self,
         query: str,
         top_k: int = 5,
-        include_images: bool = True
+        include_images: bool = True,
+        schema_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search (vector + keyword + semantic) and extract relevant information using LLM
         
-        If documents have schema information, uses AI to determine relevant fields and filters accordingly
+        Args:
+            query: Search query
+            top_k: Number of results to return
+            include_images: Whether to include images in results
+            schema_id: If provided, searches in the schema-specific index
+        
+        Returns:
+            List of search results
         """
         try:
+            # Determine which index to search
+            if schema_id and schema_id in self.schema_indexes:
+                # Search in schema-specific index
+                return self._hybrid_search_schema_index(query, top_k, include_images, schema_id)
+            else:
+                # Search in default index
+                return self._hybrid_search_default_index(query, top_k, include_images)
+            
+        except Exception as e:
+            logger.error(f"Error performing hybrid search: {str(e)}")
+            raise
+    
+    def _hybrid_search_schema_index(
+        self,
+        query: str,
+        top_k: int,
+        include_images: bool,
+        schema_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform hybrid search on a schema-specific index
+        
+        Uses AI to determine which fields are relevant to the query,
+        then searches across those fields with their vectors
+        """
+        from app.models import FieldDataType
+        
+        schema_index_name = self.schema_indexes[schema_id]
+        logger.info(f"Searching in schema-based index: {schema_index_name}")
+        
+        # Create search client for schema index
+        schema_search_client = SearchClient(
+            endpoint=self.search_endpoint,
+            index_name=schema_index_name,
+            credential=self.credential
+        )
+        
+        # TODO: Get schema object to determine relevant fields
+        # For now, we'll search across all vector fields in the index
+        
+        # Generate query embedding
+        query_vector = self.generate_embedding(query)
+        
+        # Get index definition to find all vector fields
+        try:
+            index_def = self.index_client.get_index(schema_index_name)
+            vector_fields = [
+                field.name for field in index_def.fields
+                if field.name.endswith('_vector')
+            ]
+            logger.info(f"Found {len(vector_fields)} vector fields: {vector_fields}")
+        except Exception as e:
+            logger.error(f"Error getting index definition: {str(e)}")
+            vector_fields = []
+        
+        # Perform hybrid search across all vector fields
+        # Build vector queries for all vector fields
+        vector_queries = []
+        for vector_field in vector_fields[:5]:  # Limit to first 5 to avoid too many queries
+            vector_queries.append({
+                "kind": "vector",
+                "vector": query_vector,
+                "fields": vector_field,
+                "k": top_k * 2
+            })
+        
+        # If no vector queries, add at least one default
+        if not vector_queries:
+            logger.warning("No vector fields found, using default search")
+        
+        # Select fields to return (all non-vector fields)
+        select_fields = [
+            field.name for field in index_def.fields
+            if not field.name.endswith('_vector')
+        ]
+        
+        results = schema_search_client.search(
+            search_text=query,
+            vector_queries=vector_queries if vector_queries else None,
+            select=select_fields,
+            query_type="semantic",
+            semantic_configuration_name="my-semantic-config",
+            top=top_k
+        )
+        
+        search_results = []
+        for result in results:
+            # Extract all field data
+            filename = result.get("filename", "")
+            source_url = result.get("source_url", "")
+            schema_name = result.get("schema_name", "")
+            
+            # Collect all field content
+            field_contents = []
+            for field_name in select_fields:
+                if field_name not in ['id', 'filename', 'source_url', 'schema_id', 'schema_name', 'metadata']:
+                    field_value = result.get(field_name, "")
+                    if field_value:
+                        field_contents.append(f"[{field_name}]\\n{field_value}")
+            
+            combined_content = "\\n\\n".join(field_contents)
+            
+            # Use LLM to extract relevant information
+            extracted_info = self._extract_relevant_info_with_llm(
+                query=query,
+                content=combined_content,
+                all_image_urls=[],  # Schema-based documents don't have image_urls in the same way
+                include_images=False  # For now, image handling in schema mode is different
+            )
+            
+            # Skip if no relevant information found
+            if not extracted_info or not extracted_info.get("answer"):
+                continue
+            
+            search_result = {
+                "answer": extracted_info.get("answer", ""),
+                "images": [],  # TODO: Handle images in schema mode
+                "source_document": filename,
+                "source_url": source_url,
+                "score": result.get("@search.score", 0.0),
+                "schema_name": schema_name
+            }
+            
+            search_results.append(search_result)
+        
+        logger.info(f"Schema-based search returned {len(search_results)} results")
+        return search_results
+    
+    def _hybrid_search_default_index(
+        self,
+        query: str,
+        top_k: int,
+        include_images: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform hybrid search (vector + keyword + semantic) and extract relevant information using LLM
+        
+        Searches the default index (non-schema-based documents)
+        """
+        try:
+            # Ensure default index exists before searching
+            self._ensure_default_index_exists()
+            
             # Generate query embedding
             query_vector = self.generate_embedding(query)
             

@@ -17,6 +17,7 @@ from app.models import (
 from app.blob_service import BlobStorageService
 from app.excel_processor import ExcelProcessor
 from app.llm_service import MultiModalLLMService
+from app.content_understanding_service import ContentUnderstandingService
 from app.search_service import SearchService
 from app.schema_service import SchemaService
 
@@ -46,6 +47,7 @@ app.add_middleware(
 # Initialize services
 blob_service: Optional[BlobStorageService] = None
 llm_service: Optional[MultiModalLLMService] = None
+content_understanding_service: Optional[ContentUnderstandingService] = None
 search_service: Optional[SearchService] = None
 schema_service: Optional[SchemaService] = None
 
@@ -56,7 +58,7 @@ job_status_store: Dict[str, ProcessingStatus] = {}
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global blob_service, llm_service, search_service, schema_service
+    global blob_service, llm_service, content_understanding_service, search_service, schema_service
     
     try:
         logger.info("Initializing services...")
@@ -67,6 +69,14 @@ async def startup_event():
         )
         
         llm_service = MultiModalLLMService(
+            endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key,
+            deployment_name=settings.azure_openai_deployment_name,
+            api_version=settings.azure_openai_api_version
+        )
+        
+        # Initialize Content Understanding Service (uses same Azure OpenAI endpoint)
+        content_understanding_service = ContentUnderstandingService(
             endpoint=settings.azure_openai_endpoint,
             api_key=settings.azure_openai_api_key,
             deployment_name=settings.azure_openai_deployment_name,
@@ -111,6 +121,7 @@ async def health_check():
         "services": {
             "blob_storage": blob_service is not None,
             "llm_service": llm_service is not None,
+            "content_understanding_service": content_understanding_service is not None,
             "search_service": search_service is not None,
             "schema_service": schema_service is not None
         },
@@ -226,12 +237,51 @@ def process_document_background(job_id: str, file_content: bytes, filename: str,
         job_status_store[job_id].progress = 0
         logger.info(f"Starting document structuring with {len(images)} images")
         
-        document = llm_service.structure_document(
-            text_content, 
-            images, 
-            filename,
-            progress_callback=progress_callback
-        )
+        # Structure document differently based on whether schema is provided
+        if schema:
+            # Use Content Understanding Service for schema-based extraction
+            logger.info(f"Using Content Understanding with schema: {schema.name}")
+            
+            # First, extract fields using Content Understanding
+            extracted_fields = content_understanding_service.extract_fields_from_excel(
+                text_content=text_content,
+                images=images,
+                schema=schema.dict(),
+                filename=filename
+            )
+            
+            # Create a document structure with extracted fields
+            document = {
+                'filename': filename,
+                'content': '',  # Will be generated from extracted fields
+                'images': images,
+                'extracted_fields': extracted_fields,
+                'metadata': {
+                    'sheet_count': len(text_content),
+                    'image_count': len(images),
+                    'total_rows': sum(len(sheet.get('rows', [])) for sheet in text_content),
+                    'schema_id': schema.id,
+                    'schema_name': schema.name
+                }
+            }
+            
+            # Generate a combined content from extracted fields for display
+            content_parts = [f"ファイル名: {filename}\n"]
+            for field_name, field_value in extracted_fields.items():
+                if field_value is not None:
+                    content_parts.append(f"{field_name}: {field_value}\n")
+            document['content'] = "\n".join(content_parts)
+            
+            logger.info(f"Extracted {len(extracted_fields)} fields using Content Understanding")
+        else:
+            # Use traditional multimodal LLM structuring
+            document = llm_service.structure_document(
+                text_content, 
+                images, 
+                filename,
+                progress_callback=progress_callback
+            )
+        
         logger.info(f"Document structured with {document['metadata']['image_count']} images")
         
         # Index in Azure AI Search
@@ -342,15 +392,19 @@ async def search(request: SearchRequest):
     - Performs vector + keyword + semantic search
     - Returns results with images and references
     - No results message if nothing found
+    - If schema_id provided, searches in schema-specific index
     """
     try:
         logger.info(f"Searching for: {request.query}")
+        if request.schema_id:
+            logger.info(f"Using schema: {request.schema_id}")
         
         # Perform hybrid search
         results = search_service.hybrid_search(
             query=request.query,
             top_k=request.top_k,
-            include_images=request.include_images
+            include_images=request.include_images,
+            schema_id=request.schema_id
         )
         
         # Prepare response

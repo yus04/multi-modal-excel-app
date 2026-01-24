@@ -41,12 +41,13 @@ export interface ProcessingStatus {
   error?: string;
 }
 
-export type FieldDataType = 'text' | 'image';
+export type FieldDataType = 'text' | 'image' | 'table';
 
 export interface FieldDefinition {
   name: string;
   data_type: FieldDataType;
   description?: string;
+  sub_fields?: FieldDefinition[];  // For table type
 }
 
 export interface ExcelSchema {

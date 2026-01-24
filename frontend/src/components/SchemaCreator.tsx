@@ -25,14 +25,51 @@ const SchemaCreator: React.FC<SchemaCreatorProps> = ({ onSave, onCancel }) => {
     }
   };
 
-  const updateField = (index: number, key: keyof FieldDefinition, value: string) => {
+  const updateField = (index: number, key: keyof FieldDefinition, value: any) => {
     const newFields = [...fields];
     if (key === 'data_type') {
       newFields[index][key] = value as FieldDataType;
+      // If changing to table type, initialize sub_fields
+      if (value === 'table' && !newFields[index].sub_fields) {
+        newFields[index].sub_fields = [{ name: '', data_type: 'text', description: '' }];
+      }
+      // If changing from table type, remove sub_fields
+      if (value !== 'table' && newFields[index].sub_fields) {
+        delete newFields[index].sub_fields;
+      }
     } else {
       newFields[index][key] = value;
     }
     setFields(newFields);
+  };
+
+  const addSubField = (fieldIndex: number) => {
+    const newFields = [...fields];
+    if (!newFields[fieldIndex].sub_fields) {
+      newFields[fieldIndex].sub_fields = [];
+    }
+    newFields[fieldIndex].sub_fields!.push({ name: '', data_type: 'text', description: '' });
+    setFields(newFields);
+  };
+
+  const removeSubField = (fieldIndex: number, subFieldIndex: number) => {
+    const newFields = [...fields];
+    if (newFields[fieldIndex].sub_fields && newFields[fieldIndex].sub_fields!.length > 1) {
+      newFields[fieldIndex].sub_fields = newFields[fieldIndex].sub_fields!.filter((_, i) => i !== subFieldIndex);
+      setFields(newFields);
+    }
+  };
+
+  const updateSubField = (fieldIndex: number, subFieldIndex: number, key: keyof FieldDefinition, value: string) => {
+    const newFields = [...fields];
+    if (newFields[fieldIndex].sub_fields) {
+      if (key === 'data_type') {
+        newFields[fieldIndex].sub_fields![subFieldIndex][key] = value as FieldDataType;
+      } else {
+        newFields[fieldIndex].sub_fields![subFieldIndex][key] = value;
+      }
+      setFields(newFields);
+    }
   };
 
   const handleSave = () => {
@@ -103,6 +140,7 @@ const SchemaCreator: React.FC<SchemaCreatorProps> = ({ onSave, onCancel }) => {
               >
                 <option value="text">テキスト</option>
                 <option value="image">画像</option>
+                <option value="table">テーブル</option>
               </select>
               <input
                 type="text"
@@ -120,6 +158,55 @@ const SchemaCreator: React.FC<SchemaCreatorProps> = ({ onSave, onCancel }) => {
               >
                 🗑️
               </button>
+              
+              {/* Show sub-fields for table type */}
+              {field.data_type === 'table' && field.sub_fields && (
+                <div className="sub-fields-container">
+                  <div className="sub-fields-label">カラム（サブフィールド）:</div>
+                  {field.sub_fields.map((subField, subIndex) => (
+                    <div key={subIndex} className="sub-field-row">
+                      <input
+                        type="text"
+                        value={subField.name}
+                        onChange={(e) => updateSubField(index, subIndex, 'name', e.target.value)}
+                        placeholder="カラム名"
+                        className="sub-field-name-input"
+                      />
+                      <select
+                        value={subField.data_type}
+                        onChange={(e) => updateSubField(index, subIndex, 'data_type', e.target.value)}
+                        className="sub-field-type-select"
+                      >
+                        <option value="text">テキスト</option>
+                        <option value="image">画像</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={subField.description || ''}
+                        onChange={(e) => updateSubField(index, subIndex, 'description', e.target.value)}
+                        placeholder="説明"
+                        className="sub-field-desc-input"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSubField(index, subIndex)}
+                        className="remove-sub-field-btn"
+                        disabled={field.sub_fields!.length === 1}
+                        title="カラムを削除"
+                      >
+                        ✖️
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => addSubField(index)}
+                    className="add-sub-field-btn"
+                  >
+                    + カラムを追加
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
