@@ -13,6 +13,7 @@ const SchemaCreator: React.FC<SchemaCreatorProps> = ({ onSave, onCancel }) => {
   const [fields, setFields] = useState<FieldDefinition[]>([
     { name: '', data_type: 'text', description: '' }
   ]);
+  const [error, setError] = useState<string | null>(null);
 
   const addField = () => {
     setFields([...fields, { name: '', data_type: 'text', description: '' }]);
@@ -37,22 +38,29 @@ const SchemaCreator: React.FC<SchemaCreatorProps> = ({ onSave, onCancel }) => {
   const handleSave = () => {
     // Validate
     if (!schemaName.trim()) {
-      alert('スキーマ名を入力してください');
+      setError('スキーマ名を入力してください');
       return;
     }
 
     const validFields = fields.filter(f => f.name.trim());
     if (validFields.length === 0) {
-      alert('少なくとも1つのフィールドを定義してください');
+      setError('少なくとも1つのフィールドを定義してください');
       return;
     }
 
+    setError(null);
     onSave(schemaName, schemaDescription, validFields);
   };
 
   return (
     <div className="schema-creator">
       <h3>新しいスキーマを作成</h3>
+      
+      {error && (
+        <div className="error-message">
+          {error}
+        </div>
+      )}
       
       <div className="form-group">
         <label>スキーマ名 *</label>

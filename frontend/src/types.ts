@@ -1,10 +1,10 @@
 export interface SearchResult {
-  answer: string;  // LLMが生成した回答テキスト
-  images: string[];  // 回答に関連する画像のみ
+  answer: string;  // LLM-generated answer text
+  images: string[];  // Only relevant images for the answer
   source_document: string;
   source_url: string;
   score: number;
-  schema_name?: string;  // スキーマ名（スキーマベースのインデックスの場合）
+  schema_name?: string;  // Schema name (for schema-based indexing)
 }
 
 export interface SearchRequest {

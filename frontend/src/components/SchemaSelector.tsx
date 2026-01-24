@@ -15,6 +15,8 @@ const SchemaSelector: React.FC<SchemaSelectorProps> = ({
   onSelect,
   onCreateNew,
 }) => {
+  const selectedSchema = selectedSchemaId ? schemas.find(s => s.id === selectedSchemaId) : null;
+  
   return (
     <div className="schema-selector">
       <label>スキーマを選択</label>
@@ -36,18 +38,18 @@ const SchemaSelector: React.FC<SchemaSelectorProps> = ({
         </button>
       </div>
       
-      {selectedSchemaId && schemas.find(s => s.id === selectedSchemaId) && (
+      {selectedSchema && (
         <div className="schema-info">
-          <h4>{schemas.find(s => s.id === selectedSchemaId)?.name}</h4>
-          {schemas.find(s => s.id === selectedSchemaId)?.description && (
+          <h4>{selectedSchema.name}</h4>
+          {selectedSchema.description && (
             <p className="schema-description">
-              {schemas.find(s => s.id === selectedSchemaId)?.description}
+              {selectedSchema.description}
             </p>
           )}
           <div className="fields-preview">
             <strong>フィールド:</strong>
             <ul>
-              {schemas.find(s => s.id === selectedSchemaId)?.fields.map((field, idx) => (
+              {selectedSchema.fields.map((field, idx) => (
                 <li key={idx}>
                   {field.name} 
                   <span className="field-type">
