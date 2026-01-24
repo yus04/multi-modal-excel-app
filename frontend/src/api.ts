@@ -5,7 +5,8 @@ import {
   UploadResponse, 
   ProcessingStatus,
   ExcelSchema,
-  SchemaCreateRequest
+  SchemaCreateRequest,
+  IndexedDocument
 } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -18,7 +19,10 @@ const api = axios.create({
 });
 
 export const searchProcedures = async (request: SearchRequest): Promise<SearchResponse> => {
+  console.log('[API] Search request:', request);
   const response = await api.post<SearchResponse>('/search', request);
+  console.log('[API] Search response status:', response.status);
+  console.log('[API] Search response data:', response.data);
   return response.data;
 };
 
@@ -83,5 +87,11 @@ export const updateSchema = async (schemaId: string, request: SchemaCreateReques
 
 export const deleteSchema = async (schemaId: string): Promise<{ success: boolean; message: string }> => {
   const response = await api.delete(`/schemas/${schemaId}`);
+  return response.data;
+};
+
+// Document management APIs
+export const listDocuments = async (): Promise<IndexedDocument[]> => {
+  const response = await api.get<IndexedDocument[]>('/documents');
   return response.data;
 };

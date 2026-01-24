@@ -1,0 +1,82 @@
+.document-selector {
+  margin: 1rem 0;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+}
+
+.document-selector label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: #333;
+  font-size: 0.95rem;
+}
+
+.document-select {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #667eea;
+  border-radius: 6px;
+  font-size: 1rem;
+  background-color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.document-select:hover {
+  border-color: #5a67d8;
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.1);
+}
+
+.document-select:focus {
+  outline: none;
+  border-color: #5a67d8;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.document-selector-loading {
+  padding: 0.75rem;
+  text-align: center;
+  color: #666;
+  font-style: italic;
+}
+
+.document-info {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.document-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.document-filename {
+  font-weight: 600;
+  color: #333;
+  font-size: 0.95rem;
+}
+
+.document-schema {
+  color: #667eea;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .document-selector {
+    padding: 0.75rem;
+  }
+  
+  .document-select {
+    font-size: 0.95rem;
+    padding: 0.6rem;
+  }
+}

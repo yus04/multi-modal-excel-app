@@ -94,3 +94,13 @@ class ProcessingStatus(BaseModel):
     current_step: str = ""
     message: str = ""
     error: str = ""
+
+
+class IndexedDocument(BaseModel):
+    """Represents a document indexed in the search service"""
+    id: str
+    filename: str
+    source_url: str
+    schema_id: Optional[str] = None
+    schema_name: Optional[str] = None
+    index_name: str

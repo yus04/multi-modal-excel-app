@@ -5,17 +5,20 @@ import {
   uploadDocument, 
   getProcessingStatus, 
   listSchemas, 
-  createSchema 
+  createSchema,
+  listDocuments
 } from './api';
 import { 
   SearchResult, 
   UploadResponse, 
   ProcessingStatus, 
   ExcelSchema, 
-  FieldDefinition 
+  FieldDefinition,
+  IndexedDocument
 } from './types';
 import SchemaSelector from './components/SchemaSelector';
 import SchemaCreator from './components/SchemaCreator';
+import DocumentSelector from './components/DocumentSelector';
 
 function App() {
   const [query, setQuery] = useState('');
@@ -36,9 +39,16 @@ function App() {
   const [selectedSchemaId, setSelectedSchemaId] = useState<string | null>(null);
   const [showSchemaCreator, setShowSchemaCreator] = useState(false);
 
-  // Load schemas on mount
+  // Document management states
+  const [documents, setDocuments] = useState<IndexedDocument[]>([]);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [selectedDocumentSchemaId, setSelectedDocumentSchemaId] = useState<string | null>(null);
+  const [loadingDocuments, setLoadingDocuments] = useState(false);
+
+  // Load schemas and documents on mount
   useEffect(() => {
     loadSchemas();
+    loadDocuments();
   }, []);
 
   const loadSchemas = async () => {
@@ -47,6 +57,19 @@ function App() {
       setSchemas(schemasList);
     } catch (err) {
       console.error('Error loading schemas:', err);
+    }
+  };
+
+  const loadDocuments = async () => {
+    try {
+      setLoadingDocuments(true);
+      const documentsList = await listDocuments();
+      setDocuments(documentsList);
+      console.log('[App] Loaded documents:', documentsList);
+    } catch (err) {
+      console.error('Error loading documents:', err);
+    } finally {
+      setLoadingDocuments(false);
     }
   };
 
@@ -64,18 +87,31 @@ function App() {
     setSuccess(null);
 
     try {
+      console.log('[Search] Starting search...');
+      console.log('[Search] Query:', query.trim());
+      console.log('[Search] Selected Document ID:', selectedDocumentId);
+      console.log('[Search] Selected Document Schema ID:', selectedDocumentSchemaId);
+      console.log('[Search] Top K: 5');
+      console.log('[Search] Include Images: true');
+      
       const response = await searchProcedures({
         query: query.trim(),
         top_k: 5,
         include_images: true,
+        schema_id: selectedDocumentSchemaId || undefined,
       });
+
+      console.log('[Search] Response received:', response);
+      console.log('[Search] Total results:', response.total_results);
+      console.log('[Search] Results count:', response.results.length);
+      console.log('[Search] Message:', response.message);
 
       setResults(response.results);
       setTotalResults(response.total_results);
       setMessage(response.message || null);
     } catch (err) {
       setError('検索中にエラーが発生しました。もう一度お試しください。');
-      console.error('Search error:', err);
+      console.error('[Search] Search error:', err);
     } finally {
       setLoading(false);
     }
@@ -173,6 +209,8 @@ function App() {
             clearInterval(statusIntervalRef.current);
             statusIntervalRef.current = null;
           }
+          // Reload documents list after successful upload
+          loadDocuments();
         } else if (status.status === 'failed') {
           console.log('[Polling] Processing failed:', status.error);
           setError(`処理中にエラーが発生しました: ${status.error || '不明なエラー'}`);
@@ -305,6 +343,19 @@ function App() {
         {/* Search Section */}
         <section className="search-section">
           <h2>🔍 作業手順の検索</h2>
+          
+          {/* Document Selector */}
+          <DocumentSelector
+            documents={documents}
+            selectedDocumentId={selectedDocumentId}
+            onSelect={(docId, schemaId) => {
+              setSelectedDocumentId(docId);
+              setSelectedDocumentSchemaId(schemaId);
+              console.log('[App] Document selected:', docId, 'Schema ID:', schemaId);
+            }}
+            loading={loadingDocuments}
+          />
+          
           <form onSubmit={handleSearch} className="search-form">
             <input
               type="text"

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.models import (
     SearchRequest, SearchResponse, UploadResponse, SearchResult, ProcessingStatus,
-    ExcelSchema, SchemaCreateRequest, FieldDefinition
+    ExcelSchema, SchemaCreateRequest, FieldDefinition, IndexedDocument
 )
 from app.blob_service import BlobStorageService
 from app.excel_processor import ExcelProcessor
@@ -290,10 +290,14 @@ def process_document_background(job_id: str, file_content: bytes, filename: str,
         
         if schema:
             # Use schema-based indexing
+            logger.info(f"[{job_id}] Indexing document with schema: {schema.name} (ID: {schema.id})")
             search_service.index_document_with_schema(document, filename, file_url, schema)
+            logger.info(f"[{job_id}] Successfully indexed document in schema-specific index")
         else:
             # Use default indexing
+            logger.info(f"[{job_id}] Indexing document in default index")
             search_service.index_document(document, filename, file_url)
+            logger.info(f"[{job_id}] Successfully indexed document in default index")
         
         # Complete
         job_status_store[job_id].status = "completed"
@@ -382,6 +386,44 @@ async def upload_document(
     except Exception as e:
         logger.error(f"Error processing upload: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
+
+
+@app.get("/documents", response_model=List[IndexedDocument])
+async def list_documents():
+    """List all indexed documents across all indexes"""
+    logger.info("Listing all indexed documents")
+    try:
+        documents = search_service.get_all_documents()
+        return documents
+    except Exception as e:
+        logger.error(f"Error listing documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/debug/index-status")
+async def get_index_status():
+    """
+    Debug endpoint to check index status and document count
+    """
+    try:
+        default_count = search_service.get_document_count()
+        
+        # Get counts for all schema indexes
+        schema_counts = {}
+        for schema_id in search_service.schema_indexes.keys():
+            schema_counts[schema_id] = search_service.get_document_count(schema_id)
+        
+        return {
+            "default_index": {
+                "name": search_service.index_name,
+                "document_count": default_count
+            },
+            "schema_indexes": schema_counts,
+            "registered_schemas": list(search_service.schema_indexes.keys())
+        }
+    except Exception as e:
+        logger.error(f"Error getting index status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @app.post("/search", response_model=SearchResponse)

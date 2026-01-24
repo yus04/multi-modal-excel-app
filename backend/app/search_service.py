@@ -68,6 +68,9 @@ class SearchService:
         
         # Track if default index has been checked
         self._default_index_checked = False
+        
+        # Load existing schema indexes on initialization
+        self.load_existing_schema_indexes()
     
     def _ensure_default_index_exists(self):
         """Create default search index if it doesn't exist (lazy initialization)"""
@@ -77,11 +80,44 @@ class SearchService:
         try:
             self.index_client.get_index(self.index_name)
             logger.info(f"Default index '{self.index_name}' already exists")
+            # Check document count
+            doc_count = self.get_document_count()
+            logger.info(f"Index '{self.index_name}' contains {doc_count} documents")
         except Exception:
             logger.info(f"Creating default index '{self.index_name}' (first use)")
             self._create_index()
         
         self._default_index_checked = True
+    
+    def get_document_count(self, schema_id: Optional[str] = None) -> int:
+        """Get the number of documents in an index
+        
+        Args:
+            schema_id: If provided, gets count from schema-specific index
+            
+        Returns:
+            Number of documents in the index
+        """
+        try:
+            if schema_id and schema_id in self.schema_indexes:
+                index_name = self.schema_indexes[schema_id]
+                client = SearchClient(
+                    endpoint=self.search_endpoint,
+                    index_name=index_name,
+                    credential=self.credential
+                )
+            else:
+                index_name = self.index_name
+                client = self.search_client
+            
+            # Search with no filter to get total count
+            results = client.search(search_text="*", include_total_count=True, top=0)
+            count = results.get_count()
+            logger.debug(f"Index '{index_name}' document count: {count}")
+            return count
+        except Exception as e:
+            logger.error(f"Error getting document count: {str(e)}")
+            return 0
     
     def _get_schema_index_name(self, schema_id: str) -> str:
         """Get the index name for a specific schema"""
@@ -284,11 +320,13 @@ Respond with ONLY the English field name, nothing else."""
         # Check if index already exists
         try:
             self.index_client.get_index(schema_index_name)
-            logger.info(f"Schema-based index {schema_index_name} already exists")
+            logger.info(f"Schema-based index '{schema_index_name}' already exists")
             self.schema_indexes[schema.id] = schema_index_name
+            logger.info(f"Schema index registered: schema_id='{schema.id}' -> index_name='{schema_index_name}'")
             return schema_index_name
         except Exception:
-            logger.info(f"Creating schema-based index {schema_index_name}")
+            logger.info(f"Creating new schema-based index '{schema_index_name}'")
+
         
         # Build field list
         fields = [
@@ -403,6 +441,8 @@ Respond with ONLY the English field name, nothing else."""
         
         # Track this index
         self.schema_indexes[schema.id] = schema_index_name
+        logger.info(f"Schema index registered: schema_id='{schema.id}' -> index_name='{schema_index_name}'")
+        logger.info(f"Currently registered schema indexes: {list(self.schema_indexes.keys())}")
         
         return schema_index_name
     
@@ -910,23 +950,77 @@ Respond with ONLY the English field name, nothing else."""
             query: Search query
             top_k: Number of results to return
             include_images: Whether to include images in results
-            schema_id: If provided, searches in the schema-specific index
+            schema_id: If provided, searches in the schema-specific index.
+                      If None, searches across ALL indexes (default + all schema indexes)
         
         Returns:
             List of search results
         """
         try:
-            # Determine which index to search
-            if schema_id and schema_id in self.schema_indexes:
-                # Search in schema-specific index
-                return self._hybrid_search_schema_index(query, top_k, include_images, schema_id)
+            logger.info(f"=== HYBRID SEARCH START ===")
+            logger.info(f"Query: '{query}'")
+            logger.info(f"Top K: {top_k}")
+            logger.info(f"Include Images: {include_images}")
+            logger.info(f"Schema ID: {schema_id}")
+            logger.info(f"Registered schema indexes: {list(self.schema_indexes.keys())}")
+            
+            # Determine which index(es) to search
+            if schema_id:
+                # Search in specific schema index
+                if schema_id in self.schema_indexes:
+                    logger.info(f"Using schema-specific index for schema_id: {schema_id}")
+                    return self._hybrid_search_schema_index(query, top_k, include_images, schema_id)
+                else:
+                    logger.warning(f"Schema ID '{schema_id}' not found in registered indexes. Falling back to default index.")
+                    logger.info(f"Using default index: {self.index_name}")
+                    return self._hybrid_search_default_index(query, top_k, include_images)
             else:
-                # Search in default index
-                return self._hybrid_search_default_index(query, top_k, include_images)
+                # Search ALL indexes (default + all schema indexes)
+                logger.info(f"Searching across ALL indexes (default + {len(self.schema_indexes)} schema indexes)")
+                return self._hybrid_search_all_indexes(query, top_k, include_images)
             
         except Exception as e:
             logger.error(f"Error performing hybrid search: {str(e)}")
             raise
+    
+    def _hybrid_search_all_indexes(
+        self,
+        query: str,
+        top_k: int,
+        include_images: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Search across all indexes (default + all schema indexes) and merge results
+        
+        Results are merged and re-ranked by score
+        """
+        all_results = []
+        
+        # Search default index
+        try:
+            logger.info(f"Searching default index: {self.index_name}")
+            default_results = self._hybrid_search_default_index(query, top_k, include_images)
+            all_results.extend(default_results)
+            logger.info(f"Default index returned {len(default_results)} results")
+        except Exception as e:
+            logger.error(f"Error searching default index: {str(e)}")
+        
+        # Search all schema indexes
+        for schema_id in self.schema_indexes.keys():
+            try:
+                logger.info(f"Searching schema index: {schema_id}")
+                schema_results = self._hybrid_search_schema_index(query, top_k, include_images, schema_id)
+                all_results.extend(schema_results)
+                logger.info(f"Schema index {schema_id} returned {len(schema_results)} results")
+            except Exception as e:
+                logger.error(f"Error searching schema index {schema_id}: {str(e)}")
+        
+        # Sort by score (descending) and return top_k
+        all_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        merged_results = all_results[:top_k]
+        
+        logger.info(f"Merged {len(all_results)} total results, returning top {len(merged_results)}")
+        return merged_results
     
     def _hybrid_search_schema_index(
         self,
@@ -1027,12 +1121,12 @@ Respond with ONLY the English field name, nothing else."""
             )
             
             # Skip if no relevant information found
-            if not extracted_info or not extracted_info.get("answer"):
+            if not extracted_info or not extracted_info.get("relevant_content"):
                 continue
             
             search_result = {
-                "answer": extracted_info.get("answer", ""),
-                "images": [],  # TODO: Handle images in schema mode
+                "relevant_content": extracted_info.get("relevant_content", ""),
+                "images": extracted_info.get("images", []),
                 "source_document": filename,
                 "source_url": source_url,
                 "score": result.get("@search.score", 0.0),
@@ -1041,7 +1135,18 @@ Respond with ONLY the English field name, nothing else."""
             
             search_results.append(search_result)
         
-        logger.info(f"Schema-based search returned {len(search_results)} results")
+        logger.info(f"Schema-based search returned {len(search_results)} results (before RAG)")
+        
+        # Generate final answer using RAG if we have results
+        if search_results:
+            logger.info("Generating final answer using RAG for schema index results...")
+            final_answer = self._generate_answer_with_rag(query, search_results)
+            
+            # Replace relevant_content with generated answer in each result
+            for result in search_results:
+                result["answer"] = final_answer
+                del result["relevant_content"]  # Remove intermediate data
+        
         return search_results
     
     def _hybrid_search_default_index(
@@ -1059,10 +1164,19 @@ Respond with ONLY the English field name, nothing else."""
             # Ensure default index exists before searching
             self._ensure_default_index_exists()
             
+            logger.info(f"Generating embedding for query: '{query}'")
             # Generate query embedding
             query_vector = self.generate_embedding(query)
+            logger.info(f"Embedding generated, vector length: {len(query_vector)}")
+            
+            # Check index document count before searching
+            doc_count = self.get_document_count()
+            logger.info(f"Index '{self.index_name}' contains {doc_count} documents before search")
             
             # Perform hybrid search with semantic ranking
+            logger.info(f"Executing search on index: {self.index_name}")
+            logger.info(f"Search parameters: top_k={top_k}, semantic=True, vector_k={top_k * 2}")
+            
             results = self.search_client.search(
                 search_text=query,
                 vector_queries=[{
@@ -1077,8 +1191,15 @@ Respond with ONLY the English field name, nothing else."""
                 top=top_k
             )
             
+            # Convert to list to count results
+            results_list = list(results)
+            logger.info(f"Azure Search returned {len(results_list)} raw results")
+            
             search_results = []
-            for result in results:
+            logger.info(f"Processing {len(results_list)} results from Azure Search")
+            
+            for idx, result in enumerate(results_list):
+                logger.debug(f"Processing result {idx + 1}/{len(results_list)}: {result.get('filename', 'unknown')}")
                 # Extract content
                 content = result.get("content", "")
                 all_image_urls = result.get("image_urls", [])
@@ -1106,6 +1227,10 @@ Respond with ONLY the English field name, nothing else."""
                     # For now, proceed with the full content but log that it has schema
                 
                 # Use LLM to extract relevant information
+                logger.debug(f"Extracting relevant info with LLM for result {idx + 1}")
+                logger.debug(f"Content length: {len(content)}, Image URLs: {len(all_image_urls)}")
+                
+                # First extract relevant portions
                 extracted_info = self._extract_relevant_info_with_llm(
                     query=query,
                     content=content,
@@ -1114,11 +1239,14 @@ Respond with ONLY the English field name, nothing else."""
                 )
                 
                 # Skip if no relevant information found
-                if not extracted_info or not extracted_info.get("answer"):
+                if not extracted_info or not extracted_info.get("relevant_content"):
+                    logger.debug(f"Result {idx + 1} skipped: No relevant information extracted by LLM")
                     continue
                 
+                logger.debug(f"Result {idx + 1} included: Relevant content length={len(extracted_info.get('relevant_content', ''))}")
+                
                 search_result = {
-                    "answer": extracted_info.get("answer", ""),
+                    "relevant_content": extracted_info.get("relevant_content", ""),
                     "images": extracted_info.get("images", []),
                     "source_document": result.get("filename", ""),
                     "source_url": result.get("source_url", ""),
@@ -1130,6 +1258,19 @@ Respond with ONLY the English field name, nothing else."""
                     search_result['schema_name'] = metadata.get('schema_name')
                 
                 search_results.append(search_result)
+            
+            logger.info(f"=== HYBRID SEARCH END ===")
+            logger.info(f"Total results after LLM filtering: {len(search_results)}")
+            
+            # Generate final answer using RAG
+            if search_results:
+                logger.info("Generating final answer using RAG...")
+                final_answer = self._generate_answer_with_rag(query, search_results)
+                
+                # Replace relevant_content with generated answer in each result
+                for result in search_results:
+                    result["answer"] = final_answer
+                    del result["relevant_content"]  # Remove intermediate data
             
             return search_results
             
@@ -1144,7 +1285,10 @@ Respond with ONLY the English field name, nothing else."""
         all_image_urls: List[str],
         include_images: bool
     ) -> Dict[str, Any]:
-        """Use LLM to extract relevant information and select relevant images from the document content
+        """Use LLM to extract relevant portions from document content
+        
+        This is the Retrieve step - extracting relevant content from documents.
+        The actual answer generation happens in _generate_answer_with_rag.
         
         Args:
             query: User's question
@@ -1153,7 +1297,7 @@ Respond with ONLY the English field name, nothing else."""
             include_images: Whether to include images in the response
             
         Returns:
-            Dictionary with 'answer' (text) and 'images' (list of relevant image URLs)
+            Dictionary with 'relevant_content' (text) and 'images' (list of relevant image URLs)
         """
         try:
             # Extract image filename to URL mapping
@@ -1172,13 +1316,13 @@ Respond with ONLY the English field name, nothing else."""
             image_context = "\n".join(image_references) if image_references else "画像なし"
             
             # Prompt for LLM to extract relevant information
-            prompt = f"""以下は作業標準書のドキュメントの一部です。ユーザーの質問に答えるために、このドキュメントから関連する情報のみを抽出してください。
+            prompt = f"""以下は作業標準書のドキュメントの一部です。ユーザーの質問に関連する情報をドキュメントから抽出してください。
 
 **重要な制約:**
 1. ドキュメントに記載されている内容のみを使用してください（推測禁止）
-2. ユーザーの質問に直接関連する文章のみを抽出してください
+2. 質問に直接関連する文章のみを抽出してください
 3. 質問に関連する画像の番号をリストで指定してください（画像番号は0から始まります）
-4. ドキュメントに質問の答えが含まれていない場合は、answer を空文字列にしてください
+4. ドキュメントに質問の答えが含まれていない場合は、relevant_content を空文字列にしてください
 
 **ユーザーの質問:**
 {query}
@@ -1191,13 +1335,13 @@ Respond with ONLY the English field name, nothing else."""
 
 **回答形式（JSON）:**
 {{
-  "answer": "質問に対する回答テキスト（ドキュメントから関連部分を抽出）",
+  "relevant_content": "質問に関連する部分をドキュメントから抽出",
   "relevant_image_indices": [0, 2, 5]
 }}
 
 ドキュメントに質問の答えが含まれていない場合:
 {{
-  "answer": "",
+  "relevant_content": "",
   "relevant_image_indices": []
 }}"""
 
@@ -1216,7 +1360,7 @@ Respond with ONLY the English field name, nothing else."""
             
             # Parse JSON response
             parsed = json.loads(result_text)
-            answer = parsed.get("answer", "")
+            relevant_content = parsed.get("relevant_content", "")
             relevant_indices = parsed.get("relevant_image_indices", [])
             
             # Select relevant images based on indices
@@ -1226,10 +1370,10 @@ Respond with ONLY the English field name, nothing else."""
                     if isinstance(idx, int) and 0 <= idx < len(all_image_urls):
                         selected_images.append(all_image_urls[idx])
             
-            logger.info(f"Extracted answer length: {len(answer)}, selected {len(selected_images)} images from {len(all_image_urls)} total")
+            logger.info(f"Extracted relevant content length: {len(relevant_content)}, selected {len(selected_images)} images from {len(all_image_urls)} total")
             
             return {
-                "answer": answer,
+                "relevant_content": relevant_content,
                 "images": selected_images
             }
             
@@ -1237,6 +1381,207 @@ Respond with ONLY the English field name, nothing else."""
             logger.error(f"Error extracting relevant info with LLM: {str(e)}")
             # Fallback: return truncated content and all images
             return {
-                "answer": content[:1000] if content else "",
+                "relevant_content": content[:1000] if content else "",
                 "images": all_image_urls[:3] if include_images else []
             }
+    
+    def _generate_answer_with_rag(
+        self,
+        query: str,
+        search_results: List[Dict[str, Any]]
+    ) -> str:
+        """Generate answer using RAG (Retrieval-Augmented Generation)
+        
+        Takes the retrieved and extracted information from multiple documents
+        and generates a comprehensive answer to the user's question.
+        
+        Args:
+            query: User's question
+            search_results: List of search results with relevant_content
+            
+        Returns:
+            Generated answer text
+        """
+        try:
+            # Combine all relevant content from search results
+            combined_context = ""
+            for idx, result in enumerate(search_results, 1):
+                source = result.get("source_document", "Unknown")
+                content = result.get("relevant_content", "")
+                if content:
+                    combined_context += f"\n\n[ドキュメント{idx}: {source}]\n{content}"
+            
+            if not combined_context.strip():
+                return "関連する情報が見つかりませんでした。"
+            
+            # RAG prompt: Use retrieved context to answer the question
+            rag_prompt = f"""以下の作業標準書の情報を使用して、ユーザーの質問に答えてください。
+
+**重要な制約:**
+1. 以下のドキュメント情報のみを使用してください
+2. 推測や追加情報は含めないでください
+3. 質問に直接答える形式で回答してください
+4. 複数のドキュメントから情報がある場合は、統合してわかりやすく説明してください
+5. 手順や注意事項があれば、リスト形式で説明してください
+
+**ユーザーの質問:**
+{query}
+
+**検索されたドキュメント情報:**
+{combined_context}
+
+**回答:**
+上記の情報をもとに、質問に対する明確で簡潔な回答を生成してください。"""
+            
+            logger.info(f"Generating RAG answer with {len(search_results)} documents, total context length: {len(combined_context)}")
+            
+            response = self.openai_client.chat.completions.create(
+                model=self.chat_model,
+                messages=[
+                    {"role": "system", "content": "あなたは作業標準書の専門家です。提供されたドキュメント情報のみを使用して、正確でわかりやすい回答を生成してください。"},
+                    {"role": "user", "content": rag_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=1000
+            )
+            
+            answer = response.choices[0].message.content.strip()
+            logger.info(f"Generated RAG answer length: {len(answer)}")
+            
+            return answer
+            
+        except Exception as e:
+            logger.error(f"Error generating RAG answer: {str(e)}")
+            # Fallback: return first result's content
+            if search_results:
+                return search_results[0].get("relevant_content", "エラーが発生しました。")
+            return "回答を生成できませんでした。"
+    
+    def get_all_documents(self) -> List[Dict[str, Any]]:
+        """Get all indexed documents from all indexes (default + schema-based)
+        
+        Returns list of documents with metadata including:
+        - filename
+        - schema_id (if applicable)
+        - schema_name (if applicable)
+        - source_url
+        - id
+        """
+        all_documents = []
+        
+        # Get documents from default index
+        try:
+            logger.info(f"Fetching documents from default index: {self.index_name}")
+            results = self.search_client.search(
+                search_text="*",
+                select=["id", "filename", "source_url", "metadata"],
+                top=1000  # Reasonable limit
+            )
+            
+            for result in results:
+                metadata_str = result.get("metadata", "{}")
+                try:
+                    metadata = json.loads(metadata_str)
+                except:
+                    metadata = {}
+                
+                doc = {
+                    "id": result.get("id"),
+                    "filename": result.get("filename"),
+                    "source_url": result.get("source_url"),
+                    "schema_id": None,
+                    "schema_name": None,
+                    "index_name": self.index_name
+                }
+                
+                # Check if document has schema info in metadata
+                if metadata.get("schema_id"):
+                    doc["schema_id"] = metadata.get("schema_id")
+                    doc["schema_name"] = metadata.get("schema_name")
+                
+                all_documents.append(doc)
+            
+            logger.info(f"Found {len(all_documents)} documents in default index")
+        except Exception as e:
+            logger.error(f"Error fetching documents from default index: {str(e)}")
+        
+        # Get documents from all schema indexes
+        for schema_id, index_name in self.schema_indexes.items():
+            try:
+                logger.info(f"Fetching documents from schema index: {index_name}")
+                schema_client = SearchClient(
+                    endpoint=self.search_endpoint,
+                    index_name=index_name,
+                    credential=self.credential
+                )
+                
+                results = schema_client.search(
+                    search_text="*",
+                    select=["id", "filename", "source_url", "schema_id", "schema_name"],
+                    top=1000
+                )
+                
+                for result in results:
+                    doc = {
+                        "id": result.get("id"),
+                        "filename": result.get("filename"),
+                        "source_url": result.get("source_url"),
+                        "schema_id": result.get("schema_id", schema_id),
+                        "schema_name": result.get("schema_name"),
+                        "index_name": index_name
+                    }
+                    all_documents.append(doc)
+                
+                logger.info(f"Found {len([d for d in all_documents if d['schema_id'] == schema_id])} documents in schema index {index_name}")
+            except Exception as e:
+                logger.error(f"Error fetching documents from schema index {index_name}: {str(e)}")
+        
+        logger.info(f"Total documents found across all indexes: {len(all_documents)}")
+        return all_documents
+    
+    def load_existing_schema_indexes(self):
+        """Load all existing schema-based indexes from Azure Search
+        
+        This method scans all indexes in the search service and identifies
+        schema-based indexes by their naming pattern, then registers them.
+        """
+        try:
+            logger.info("Scanning for existing schema-based indexes...")
+            all_indexes = self.index_client.list_indexes()
+            
+            schema_pattern = f"{self.index_name}-schema-"
+            
+            for index in all_indexes:
+                if index.name.startswith(schema_pattern):
+                    # Extract schema ID from index name
+                    schema_id_part = index.name[len(schema_pattern):]
+                    
+                    # Try to find the original schema_id
+                    # For now, we'll use a simplified approach - register with the extracted ID
+                    logger.info(f"Found schema-based index: {index.name}")
+                    
+                    # Try to get a document from this index to find the schema_id
+                    try:
+                        schema_client = SearchClient(
+                            endpoint=self.search_endpoint,
+                            index_name=index.name,
+                            credential=self.credential
+                        )
+                        results = schema_client.search(
+                            search_text="*",
+                            select=["schema_id"],
+                            top=1
+                        )
+                        
+                        for result in results:
+                            schema_id = result.get("schema_id")
+                            if schema_id:
+                                self.schema_indexes[schema_id] = index.name
+                                logger.info(f"Registered schema index: schema_id='{schema_id}' -> index_name='{index.name}'")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Could not get schema_id from index {index.name}: {str(e)}")
+            
+            logger.info(f"Loaded {len(self.schema_indexes)} schema-based indexes")
+        except Exception as e:
+            logger.error(f"Error loading existing schema indexes: {str(e)}")

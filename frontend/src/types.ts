@@ -11,6 +11,7 @@ export interface SearchRequest {
   query: string;
   top_k?: number;
   include_images?: boolean;
+  schema_id?: string;  // Optional schema ID to search in schema-specific index
 }
 
 export interface SearchResponse {
@@ -63,4 +64,13 @@ export interface SchemaCreateRequest {
   name: string;
   description?: string;
   fields: FieldDefinition[];
+}
+
+export interface IndexedDocument {
+  id: string;
+  filename: string;
+  source_url: string;
+  schema_id?: string;
+  schema_name?: string;
+  index_name: string;
 }
