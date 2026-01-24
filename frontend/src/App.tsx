@@ -1,7 +1,21 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
-import { searchProcedures, uploadDocument, getProcessingStatus } from './api';
-import { SearchResult, UploadResponse, ProcessingStatus } from './types';
+import { 
+  searchProcedures, 
+  uploadDocument, 
+  getProcessingStatus, 
+  listSchemas, 
+  createSchema 
+} from './api';
+import { 
+  SearchResult, 
+  UploadResponse, 
+  ProcessingStatus, 
+  ExcelSchema, 
+  FieldDefinition 
+} from './types';
+import SchemaSelector from './components/SchemaSelector';
+import SchemaCreator from './components/SchemaCreator';
 
 function App() {
   const [query, setQuery] = useState('');
@@ -16,6 +30,29 @@ function App() {
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const statusIntervalRef = useRef<number | null>(null);
+  
+  // Schema management states
+  const [schemas, setSchemas] = useState<ExcelSchema[]>([]);
+  const [selectedSchemaId, setSelectedSchemaId] = useState<string | null>(null);
+  const [showSchemaCreator, setShowSchemaCreator] = useState(false);
+  const [schemasLoading, setSchemasLoading] = useState(false);
+
+  // Load schemas on mount
+  useEffect(() => {
+    loadSchemas();
+  }, []);
+
+  const loadSchemas = async () => {
+    setSchemasLoading(true);
+    try {
+      const schemasList = await listSchemas();
+      setSchemas(schemasList);
+    } catch (err) {
+      console.error('Error loading schemas:', err);
+    } finally {
+      setSchemasLoading(false);
+    }
+  };
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,14 +104,14 @@ function App() {
       return;
     }
 
-    console.log('[Upload] Starting upload for file:', selectedFile.name);
+    console.log('[Upload] Starting upload for file:', selectedFile.name, 'with schema:', selectedSchemaId);
     setUploading(true);
     setError(null);
     setSuccess(null);
     setProcessingStatus(null);
 
     try {
-      const response: UploadResponse = await uploadDocument(selectedFile);
+      const response: UploadResponse = await uploadDocument(selectedFile, selectedSchemaId || undefined);
       console.log('[Upload] Upload response:', response);
       console.log('[Upload] Response job_id:', response.job_id);
       console.log('[Upload] Response type:', typeof response.job_id);
@@ -161,6 +198,23 @@ function App() {
     statusIntervalRef.current = window.setInterval(pollStatus, 1000);
   };
 
+  const handleCreateSchema = async (name: string, description: string, fields: FieldDefinition[]) => {
+    try {
+      const newSchema = await createSchema({ name, description, fields });
+      setSchemas([...schemas, newSchema]);
+      setSelectedSchemaId(newSchema.id);
+      setShowSchemaCreator(false);
+      setSuccess(`スキーマ「${name}」を作成しました`);
+    } catch (err) {
+      setError('スキーマの作成中にエラーが発生しました');
+      console.error('Error creating schema:', err);
+    }
+  };
+
+  const handleCancelSchemaCreator = () => {
+    setShowSchemaCreator(false);
+  };
+
   useEffect(() => {
     return () => {
       if (statusIntervalRef.current) {
@@ -180,6 +234,25 @@ function App() {
         {/* Upload Section */}
         <section className="upload-section">
           <h2>📤 Excel ファイルのアップロード</h2>
+          
+          {/* Schema Selector */}
+          {!showSchemaCreator && (
+            <SchemaSelector
+              schemas={schemas}
+              selectedSchemaId={selectedSchemaId}
+              onSelect={setSelectedSchemaId}
+              onCreateNew={() => setShowSchemaCreator(true)}
+            />
+          )}
+          
+          {/* Schema Creator */}
+          {showSchemaCreator && (
+            <SchemaCreator
+              onSave={handleCreateSchema}
+              onCancel={handleCancelSchemaCreator}
+            />
+          )}
+          
           <div className="file-input-wrapper">
             <input
               ref={fileInputRef}
@@ -190,7 +263,7 @@ function App() {
             />
             <button
               onClick={handleUpload}
-              disabled={!selectedFile || uploading}
+              disabled={!selectedFile || uploading || showSchemaCreator}
               className="upload-button"
             >
               {uploading ? 'アップロード中...' : 'アップロード'}

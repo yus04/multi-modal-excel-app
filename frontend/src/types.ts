@@ -4,6 +4,7 @@ export interface SearchResult {
   source_document: string;
   source_url: string;
   score: number;
+  schema_name?: string;  // スキーマ名（スキーマベースのインデックスの場合）
 }
 
 export interface SearchRequest {
@@ -38,4 +39,27 @@ export interface ProcessingStatus {
   current_step: string;
   message?: string;
   error?: string;
+}
+
+export type FieldDataType = 'text' | 'image';
+
+export interface FieldDefinition {
+  name: string;
+  data_type: FieldDataType;
+  description?: string;
+}
+
+export interface ExcelSchema {
+  id: string;
+  name: string;
+  description?: string;
+  fields: FieldDefinition[];
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface SchemaCreateRequest {
+  name: string;
+  description?: string;
+  fields: FieldDefinition[];
 }

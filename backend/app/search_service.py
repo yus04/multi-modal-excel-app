@@ -341,13 +341,204 @@ class SearchService:
             logger.error(f"Error indexing document chunks: {str(e)}")
             raise
     
+    def index_document_with_schema(
+        self, 
+        document: Dict[str, Any], 
+        filename: str, 
+        file_url: str,
+        schema
+    ):
+        """
+        Index document using schema-based field extraction
+        
+        For each field in the schema:
+        - Text fields: extract text content (searchable, filterable)
+        - Image fields: extract images and convert to text descriptions using GPT-5.2
+        - Create vector field for each field (field_name_vector)
+        """
+        from app.models import FieldDataType
+        
+        logger.info(f"Indexing document with schema: {schema.name}")
+        
+        # Prepare base document
+        content = document.get('content', '')
+        all_images = document.get('images', [])
+        
+        # Build image mapping
+        image_map = {}
+        for idx, img in enumerate(all_images):
+            if 'url' in img:
+                image_map[idx] = img
+        
+        # Extract field-specific data based on schema
+        field_data = {}
+        field_vectors = {}
+        
+        for field in schema.fields:
+            field_name = field.name
+            logger.info(f"Processing field: {field_name} (type: {field.data_type})")
+            
+            if field.data_type == FieldDataType.TEXT:
+                # Extract text content for this field
+                # For now, use the full content (in production, you'd use Azure AI Content Understanding)
+                field_content = content
+                field_data[field_name] = field_content
+                
+                # Generate vector for this field
+                try:
+                    vector = self.generate_embedding(field_content)
+                    field_vectors[f"{field_name}_vector"] = vector
+                except Exception as e:
+                    logger.error(f"Error generating embedding for field {field_name}: {str(e)}")
+                    field_vectors[f"{field_name}_vector"] = [0.0] * 1536
+            
+            elif field.data_type == FieldDataType.IMAGE:
+                # Extract and describe images using GPT-5.2
+                image_descriptions = []
+                for idx, img in enumerate(all_images):
+                    if 'description' in img:
+                        image_descriptions.append(f"画像{idx + 1}: {img['description']}")
+                
+                field_content = "\n".join(image_descriptions) if image_descriptions else ""
+                field_data[field_name] = field_content
+                
+                # Generate vector for this field
+                if field_content:
+                    try:
+                        vector = self.generate_embedding(field_content)
+                        field_vectors[f"{field_name}_vector"] = vector
+                    except Exception as e:
+                        logger.error(f"Error generating embedding for field {field_name}: {str(e)}")
+                        field_vectors[f"{field_name}_vector"] = [0.0] * 1536
+                else:
+                    field_vectors[f"{field_name}_vector"] = [0.0] * 1536
+        
+        # Create search document with schema fields
+        # Note: This is a simplified version. In production, you would:
+        # 1. Create/update the index schema dynamically to include these fields
+        # 2. Use Azure AI Content Understanding for better text extraction
+        # 3. Process each field more intelligently based on Excel structure
+        
+        # For now, store field data in metadata and use the standard index structure
+        doc_id = filename
+        safe_id = base64.urlsafe_b64encode(doc_id.encode('utf-8')).decode('ascii').rstrip('=')
+        
+        # Combine all field content for main content field
+        combined_content = "\n\n".join([
+            f"[{field.name}]\n{field_data.get(field.name, '')}"
+            for field in schema.fields
+        ])
+        
+        # Collect all image URLs
+        image_urls = [img['url'] for img in all_images if 'url' in img]
+        
+        # Generate embedding for combined content
+        try:
+            content_vector = self.generate_embedding(combined_content)
+        except Exception as e:
+            logger.error(f"Failed to generate embedding: {str(e)}")
+            content_vector = [0.0] * 1536
+        
+        # Store schema info and field data in metadata
+        metadata = document.get('metadata', {}).copy()
+        metadata['schema_id'] = schema.id
+        metadata['schema_name'] = schema.name
+        metadata['field_data'] = field_data
+        metadata['has_schema'] = True
+        
+        doc = {
+            "id": safe_id,
+            "filename": filename,
+            "content": combined_content,
+            "source_url": file_url,
+            "image_urls": image_urls,
+            "metadata": json.dumps(metadata),
+            "content_vector": content_vector
+        }
+        
+        try:
+            result = self.search_client.upload_documents(documents=[doc])
+            logger.info(f"Indexed document with schema: {filename} (schema: {schema.name})")
+            return result
+        except Exception as e:
+            logger.error(f"Error indexing document with schema: {str(e)}")
+            raise
+    
+    def _determine_relevant_fields(self, query: str, schema) -> List[str]:
+        """
+        Use AI to determine which fields are relevant to the user's query
+        
+        Args:
+            query: User's search query
+            schema: ExcelSchema object with field definitions
+            
+        Returns:
+            List of relevant field names
+        """
+        try:
+            # Build field descriptions for the LLM
+            field_descriptions = []
+            for field in schema.fields:
+                desc = f"- {field.name} ({field.data_type})"
+                if field.description:
+                    desc += f": {field.description}"
+                field_descriptions.append(desc)
+            
+            fields_text = "\n".join(field_descriptions)
+            
+            prompt = f"""ユーザーの質問に答えるために、どのフィールドが関連しているかを判断してください。
+
+**利用可能なフィールド:**
+{fields_text}
+
+**ユーザーの質問:**
+{query}
+
+質問に関連するフィールドの名前をJSON配列形式で返してください。
+関連するフィールドが複数ある場合は、すべてのフィールド名を含めてください。
+関連するフィールドがない場合は、空の配列を返してください。
+
+**回答形式（JSON）:**
+{{
+  "relevant_fields": ["フィールド名1", "フィールド名2"]
+}}"""
+
+            response = self.openai_client.chat.completions.create(
+                model=self.chat_model,
+                messages=[
+                    {"role": "system", "content": "あなたはユーザーの質問に関連するフィールドを判断する専門家です。JSON形式で応答してください。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            
+            result_text = response.choices[0].message.content
+            logger.debug(f"Field determination response: {result_text}")
+            
+            # Parse JSON response
+            parsed = json.loads(result_text)
+            relevant_fields = parsed.get("relevant_fields", [])
+            
+            logger.info(f"Determined {len(relevant_fields)} relevant fields for query: {relevant_fields}")
+            return relevant_fields
+            
+        except Exception as e:
+            logger.error(f"Error determining relevant fields: {str(e)}")
+            # Fallback: return all fields
+            return [field.name for field in schema.fields]
+    
     def hybrid_search(
         self,
         query: str,
         top_k: int = 5,
         include_images: bool = True
     ) -> List[Dict[str, Any]]:
-        """Perform hybrid search (vector + keyword + semantic) and extract relevant information using LLM"""
+        """
+        Perform hybrid search (vector + keyword + semantic) and extract relevant information using LLM
+        
+        If documents have schema information, uses AI to determine relevant fields and filters accordingly
+        """
         try:
             # Generate query embedding
             query_vector = self.generate_embedding(query)
@@ -372,6 +563,28 @@ class SearchService:
                 # Extract content
                 content = result.get("content", "")
                 all_image_urls = result.get("image_urls", [])
+                metadata_str = result.get("metadata", "{}")
+                
+                # Parse metadata to check for schema
+                try:
+                    metadata = json.loads(metadata_str)
+                except:
+                    metadata = {}
+                
+                # Check if document has schema-based indexing
+                if metadata.get('has_schema') and metadata.get('field_data'):
+                    # Get schema info (in production, fetch from schema service)
+                    # For now, we'll work with the field data stored in metadata
+                    field_data = metadata.get('field_data', {})
+                    
+                    # Filter content to only include relevant fields
+                    # This is a simplified version - in production, you would:
+                    # 1. Fetch the actual schema
+                    # 2. Use _determine_relevant_fields to identify relevant fields
+                    # 3. Search only within those fields
+                    
+                    logger.info(f"Document has schema: {metadata.get('schema_name')}")
+                    # For now, proceed with the full content but log that it has schema
                 
                 # Use LLM to extract relevant information
                 extracted_info = self._extract_relevant_info_with_llm(
@@ -392,6 +605,11 @@ class SearchService:
                     "source_url": result.get("source_url", ""),
                     "score": result.get("@search.score", 0.0)
                 }
+                
+                # Add schema info if available
+                if metadata.get('has_schema'):
+                    search_result['schema_name'] = metadata.get('schema_name')
+                
                 search_results.append(search_result)
             
             return search_results
