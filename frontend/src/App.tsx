@@ -35,7 +35,6 @@ function App() {
   const [schemas, setSchemas] = useState<ExcelSchema[]>([]);
   const [selectedSchemaId, setSelectedSchemaId] = useState<string | null>(null);
   const [showSchemaCreator, setShowSchemaCreator] = useState(false);
-  const [schemasLoading, setSchemasLoading] = useState(false);
 
   // Load schemas on mount
   useEffect(() => {
@@ -43,14 +42,11 @@ function App() {
   }, []);
 
   const loadSchemas = async () => {
-    setSchemasLoading(true);
     try {
       const schemasList = await listSchemas();
       setSchemas(schemasList);
     } catch (err) {
       console.error('Error loading schemas:', err);
-    } finally {
-      setSchemasLoading(false);
     }
   };
 
@@ -120,7 +116,7 @@ function App() {
         console.log('[Upload] Job ID found, starting status polling for job:', response.job_id);
         
         // Initialize processing status immediately to show progress bar
-        const initialStatus = {
+        const initialStatus: ProcessingStatus = {
           job_id: response.job_id,
           status: 'pending',
           filename: selectedFile.name,
