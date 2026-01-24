@@ -4,17 +4,21 @@ import base64
 import uuid
 import asyncio
 from datetime import datetime
-from typing import Optional, Dict
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from typing import Optional, Dict, List
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.models import SearchRequest, SearchResponse, UploadResponse, SearchResult, ProcessingStatus
+from app.models import (
+    SearchRequest, SearchResponse, UploadResponse, SearchResult, ProcessingStatus,
+    ExcelSchema, SchemaCreateRequest, FieldDefinition
+)
 from app.blob_service import BlobStorageService
 from app.excel_processor import ExcelProcessor
 from app.llm_service import MultiModalLLMService
 from app.search_service import SearchService
+from app.schema_service import SchemaService
 
 # Configure logging
 logging.basicConfig(
@@ -43,6 +47,7 @@ app.add_middleware(
 blob_service: Optional[BlobStorageService] = None
 llm_service: Optional[MultiModalLLMService] = None
 search_service: Optional[SearchService] = None
+schema_service: Optional[SchemaService] = None
 
 # In-memory job status storage (for production, use Redis or database)
 job_status_store: Dict[str, ProcessingStatus] = {}
@@ -51,7 +56,7 @@ job_status_store: Dict[str, ProcessingStatus] = {}
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global blob_service, llm_service, search_service
+    global blob_service, llm_service, search_service, schema_service
     
     try:
         logger.info("Initializing services...")
@@ -79,6 +84,8 @@ async def startup_event():
             openai_api_version=settings.azure_openai_api_version
         )
         
+        schema_service = SchemaService()
+        
         logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Error initializing services: {str(e)}")
@@ -104,10 +111,55 @@ async def health_check():
         "services": {
             "blob_storage": blob_service is not None,
             "llm_service": llm_service is not None,
-            "search_service": search_service is not None
+            "search_service": search_service is not None,
+            "schema_service": schema_service is not None
         },
         "job_store_size": len(job_status_store)
     }
+
+
+@app.get("/schemas", response_model=List[ExcelSchema])
+async def list_schemas():
+    """List all available schemas"""
+    logger.info("Listing schemas")
+    return schema_service.list_schemas()
+
+
+@app.post("/schemas", response_model=ExcelSchema)
+async def create_schema(request: SchemaCreateRequest):
+    """Create a new schema"""
+    logger.info(f"Creating schema: {request.name}")
+    return schema_service.create_schema(request)
+
+
+@app.get("/schemas/{schema_id}", response_model=ExcelSchema)
+async def get_schema(schema_id: str):
+    """Get a specific schema by ID"""
+    logger.info(f"Getting schema: {schema_id}")
+    schema = schema_service.get_schema(schema_id)
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return schema
+
+
+@app.put("/schemas/{schema_id}", response_model=ExcelSchema)
+async def update_schema(schema_id: str, request: SchemaCreateRequest):
+    """Update an existing schema"""
+    logger.info(f"Updating schema: {schema_id}")
+    schema = schema_service.update_schema(schema_id, request)
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return schema
+
+
+@app.delete("/schemas/{schema_id}")
+async def delete_schema(schema_id: str):
+    """Delete a schema"""
+    logger.info(f"Deleting schema: {schema_id}")
+    success = schema_service.delete_schema(schema_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return {"success": True, "message": "Schema deleted successfully"}
 
 
 @app.get("/status/{job_id}", response_model=ProcessingStatus)
@@ -122,9 +174,12 @@ async def get_processing_status(job_id: str):
     return status
 
 
-def process_document_background(job_id: str, file_content: bytes, filename: str):
+def process_document_background(job_id: str, file_content: bytes, filename: str, schema: Optional[ExcelSchema] = None):
     """Background task to process document with progress tracking"""
     logger.info(f"[{job_id}] Background processing started for {filename}")
+    if schema:
+        logger.info(f"[{job_id}] Using schema: {schema.name}")
+    
     try:
         # Update status: Upload to blob storage
         job_status_store[job_id].status = "processing"
@@ -182,7 +237,13 @@ def process_document_background(job_id: str, file_content: bytes, filename: str)
         # Index in Azure AI Search
         job_status_store[job_id].current_step = "インデックスに登録中..."
         job_status_store[job_id].progress = 95
-        search_service.index_document(document, filename, file_url)
+        
+        if schema:
+            # Use schema-based indexing
+            search_service.index_document_with_schema(document, filename, file_url, schema)
+        else:
+            # Use default indexing
+            search_service.index_document(document, filename, file_url)
         
         # Complete
         job_status_store[job_id].status = "completed"
@@ -198,7 +259,11 @@ def process_document_background(job_id: str, file_content: bytes, filename: str)
 
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_document(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    schema_id: Optional[str] = Form(None)
+):
     """
     Upload and process an Excel document
     
@@ -206,9 +271,18 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     - Structures content using multimodal LLM
     - Uploads to blob storage
     - Indexes in Azure AI Search
+    - If schema_id provided, uses schema-based field extraction
     """
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are supported")
+    
+    # Validate schema if provided
+    schema = None
+    if schema_id:
+        schema = schema_service.get_schema(schema_id)
+        if not schema:
+            raise HTTPException(status_code=404, detail=f"Schema not found: {schema_id}")
+        logger.info(f"Using schema: {schema.name} ({schema_id})")
     
     try:
         logger.info(f"Processing upload: {file.filename}")
@@ -240,7 +314,8 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
             process_document_background,
             job_id,
             file_content,
-            file.filename
+            file.filename,
+            schema
         )
         logger.info(f"Started background task for {job_id}")
         

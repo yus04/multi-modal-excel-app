@@ -1,5 +1,36 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from enum import Enum
+
+
+class FieldDataType(str, Enum):
+    """Field data types"""
+    TEXT = "text"
+    IMAGE = "image"
+
+
+class FieldDefinition(BaseModel):
+    """Definition of a field in Excel schema"""
+    name: str
+    data_type: FieldDataType
+    description: Optional[str] = None
+
+
+class ExcelSchema(BaseModel):
+    """Schema definition for Excel file structure"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    fields: List[FieldDefinition]
+    created_at: str
+    updated_at: Optional[str] = None
+
+
+class SchemaCreateRequest(BaseModel):
+    """Request to create a new schema"""
+    name: str
+    description: Optional[str] = None
+    fields: List[FieldDefinition]
 
 
 class ProcedureStep(BaseModel):
