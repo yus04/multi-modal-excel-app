@@ -333,6 +333,7 @@ Respond with ONLY the English field name, nothing else."""
             SimpleField(name="id", type=SearchFieldDataType.String, key=True),
             SearchableField(name="filename", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="source_url", type=SearchFieldDataType.String),
+            SimpleField(name="image_urls", type=SearchFieldDataType.Collection(SearchFieldDataType.String)),
             SimpleField(name="schema_id", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="schema_name", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="metadata", type=SearchFieldDataType.String),
@@ -354,6 +355,20 @@ Respond with ONLY the English field name, nothing else."""
             
             if field_def.data_type == FieldDataType.TEXT:
                 # Add searchable text field
+                fields.append(
+                    SearchableField(
+                        name=safe_field_name,
+                        type=SearchFieldDataType.String,
+                        searchable=True,
+                        filterable=False,
+                        facetable=False
+                    )
+                )
+                # Add to semantic content fields
+                semantic_content_fields.append(SemanticField(field_name=safe_field_name))
+                
+            elif field_def.data_type == FieldDataType.LONG_TEXT:
+                # Add searchable text field for long text (50-60 lines of text)
                 fields.append(
                     SearchableField(
                         name=safe_field_name,
@@ -805,11 +820,20 @@ Respond with ONLY the English field name, nothing else."""
         doc_id = filename
         safe_id = base64.urlsafe_b64encode(doc_id.encode('utf-8')).decode('ascii').rstrip('=')
         
+        # Collect all image URLs from the document
+        image_urls = []
+        for img in all_images:
+            if 'url' in img:
+                image_urls.append(img['url'])
+        
+        logger.info(f"Document has {len(image_urls)} image URLs")
+        
         # Build the document
         doc = {
             "id": safe_id,
             "filename": filename,
             "source_url": file_url,
+            "image_urls": image_urls,
             "schema_id": schema.id,
             "schema_name": schema.name,
             "metadata": json.dumps({
@@ -872,49 +896,65 @@ Respond with ONLY the English field name, nothing else."""
         logger.warning(f"Could not find specific content for field '{field_name}', using full content")
         return full_content
     
-    def _determine_relevant_fields(self, query: str, schema) -> List[str]:
-        """
-        Use AI to determine which fields are relevant to the user's query
+    def _determine_relevant_fields_from_index(self, query: str, index_name: str, all_text_fields: List[str], all_vector_fields: List[str]) -> List[str]:
+        """Use AI to determine which index fields are relevant to the user's query
+        
+        This method directly uses the actual field names from the index,
+        avoiding any translation or mapping issues.
         
         Args:
             query: User's search query
-            schema: ExcelSchema object with field definitions
+            index_name: Name of the search index
+            all_text_fields: List of all text field names from the index
+            all_vector_fields: List of all vector field names from the index
             
         Returns:
-            List of relevant field names
+            List of relevant field names (actual index field names)
         """
         try:
-            # Build field descriptions for the LLM
-            field_descriptions = []
-            for field in schema.fields:
-                desc = f"- {field.name} ({field.data_type})"
-                if field.description:
-                    desc += f": {field.description}"
-                field_descriptions.append(desc)
+            # Get unique base field names (remove _vector suffix)
+            base_fields = set()
+            for field in all_text_fields:
+                base_fields.add(field)
+            for field in all_vector_fields:
+                if field.endswith('_vector'):
+                    base_fields.add(field[:-7])  # Remove _vector suffix
             
-            fields_text = "\n".join(field_descriptions)
+            # Remove metadata fields
+            base_fields = base_fields - {'id', 'document_id', 'schema_id', 'filename', 'sheet_name', 'created_at'}
             
-            prompt = f"""ユーザーの質問に答えるために、どのフィールドが関連しているかを判断してください。
+            field_list = sorted(list(base_fields))
+            fields_text = "\n".join([f"- {field}" for field in field_list])
+            
+            logger.info(f"Available index fields for relevance determination: {field_list}")
+            
+            prompt = f"""You are analyzing a search query to determine which database fields are most relevant.
 
-**利用可能なフィールド:**
+**Available fields in the index:**
 {fields_text}
 
-**ユーザーの質問:**
+**User's search query:**
 {query}
 
-質問に関連するフィールドの名前をJSON配列形式で返してください。
-関連するフィールドが複数ある場合は、すべてのフィールド名を含めてください。
-関連するフィールドがない場合は、空の配列を返してください。
+**Task:**
+Determine which fields are relevant to answer the user's query.
+Return the field names as a JSON array.
 
-**回答形式（JSON）:**
+**Response format (JSON):**
 {{
-  "relevant_fields": ["フィールド名1", "フィールド名2"]
-}}"""
+  "relevant_fields": ["field_name_1", "field_name_2"]
+}}
+
+**Instructions:**
+- Include all fields that might contain information relevant to the query
+- Use the EXACT field names from the list above
+- If no fields are clearly relevant, return an empty array
+- Consider the semantic meaning of field names when determining relevance"""
 
             response = self.openai_client.chat.completions.create(
                 model=self.chat_model,
                 messages=[
-                    {"role": "system", "content": "あなたはユーザーの質問に関連するフィールドを判断する専門家です。JSON形式で応答してください。"},
+                    {"role": "system", "content": "You are an expert at determining which database fields are relevant to a search query. Respond in JSON format with exact field names from the provided list."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
@@ -928,13 +968,142 @@ Respond with ONLY the English field name, nothing else."""
             parsed = json.loads(result_text)
             relevant_fields = parsed.get("relevant_fields", [])
             
-            logger.info(f"Determined {len(relevant_fields)} relevant fields for query: {relevant_fields}")
-            return relevant_fields
+            logger.info(f"LLM returned relevant_fields: {relevant_fields} (type: {type(relevant_fields)})")
+            
+            # Ensure it's a list
+            if not isinstance(relevant_fields, list):
+                logger.error(f"relevant_fields is not a list! Type: {type(relevant_fields)}, Value: {relevant_fields}")
+                relevant_fields = []
+            
+            # Validate that returned fields actually exist in the index
+            valid_fields = [f for f in relevant_fields if f in base_fields]
+            
+            if len(valid_fields) != len(relevant_fields):
+                invalid = set(relevant_fields) - set(valid_fields)
+                logger.warning(f"LLM returned invalid fields: {invalid}")
+            
+            logger.info(f"Determined {len(valid_fields)} relevant fields for query: {valid_fields} (type: {type(valid_fields)})")
+            return valid_fields
             
         except Exception as e:
             logger.error(f"Error determining relevant fields: {str(e)}")
-            # Fallback: return all fields
-            return [field.name for field in schema.fields]
+            # Fallback: return all fields (limited to avoid too many)
+            base_fields_list = sorted(list(base_fields))
+            return base_fields_list[:10] if base_fields_list else []
+    
+    def set_schema_service(self, schema_service):
+        """Set the schema service for retrieving schema definitions
+        
+        Args:
+            schema_service: Instance of SchemaService
+        """
+        self.schema_service = schema_service
+        logger.info("Schema service set for SearchService")
+    
+    def _get_schema_by_id(self, schema_id: str):
+        """Get schema object by schema ID
+        
+        Args:
+            schema_id: Schema ID
+            
+        Returns:
+            ExcelSchema object or None if not found
+        """
+        if not hasattr(self, 'schema_service') or not self.schema_service:
+            logger.warning("Schema service not set, cannot retrieve schema")
+            return None
+        
+        try:
+            schema = self.schema_service.get_schema(schema_id)
+            return schema
+        except Exception as e:
+            logger.error(f"Error retrieving schema {schema_id}: {str(e)}")
+            return None
+    
+    def _build_field_mapping_from_index(self, schema, index_name: str) -> Dict[str, str]:
+        """Build a reliable mapping from Japanese field names to English index field names
+        
+        This method examines the actual index definition and matches it with the schema
+        to create a deterministic mapping, avoiding LLM-based translation inconsistencies.
+        
+        Args:
+            schema: ExcelSchema object with field definitions
+            index_name: Name of the search index
+            
+        Returns:
+            Dictionary mapping Japanese field names to English index field names
+        """
+        mapping = {}
+        
+        try:
+            # Get the actual index definition
+            index_def = self.index_client.get_index(index_name)
+            
+            # Get all field names from the index (excluding _vector suffix)
+            index_field_names = set()
+            for field in index_def.fields:
+                if field.name.endswith('_vector'):
+                    # Strip _vector suffix to get base field name
+                    base_name = field.name[:-7]  # Remove "_vector"
+                    index_field_names.add(base_name)
+                elif field.name not in ['id', 'document_id', 'schema_id', 'filename', 'sheet_name', 'created_at']:
+                    # Add non-metadata fields
+                    index_field_names.add(field.name)
+            
+            logger.info(f"Found {len(index_field_names)} user-defined fields in index: {index_field_names}")
+            
+            # Build mapping by matching schema fields with index fields
+            # The order of fields in schema should match the order they were added to index
+            schema_fields = self._flatten_schema_fields(schema.fields)
+            
+            if len(schema_fields) == len(index_field_names):
+                # Simple case: same number of fields, match by order
+                index_fields_list = sorted(index_field_names)  # Sort for consistency
+                for i, schema_field in enumerate(schema_fields):
+                    if i < len(index_fields_list):
+                        mapping[schema_field.name] = index_fields_list[i]
+                        logger.debug(f"Mapped (by order): '{schema_field.name}' -> '{index_fields_list[i]}'")
+            else:
+                # Complex case: try to match by checking cache or field characteristics
+                for schema_field in schema_fields:
+                    cache_key = f"{schema_field.name}:{schema.id}"
+                    
+                    # Check cache first (from index creation)
+                    if cache_key in self.field_name_cache:
+                        english_name = self.field_name_cache[cache_key]
+                        if english_name in index_field_names:
+                            mapping[schema_field.name] = english_name
+                            logger.debug(f"Mapped (from cache): '{schema_field.name}' -> '{english_name}'")
+                            continue
+                    
+                    # If not in cache, this is an issue - log warning
+                    logger.warning(f"Field '{schema_field.name}' not found in cache or index")
+            
+            logger.info(f"Built field mapping with {len(mapping)} entries")
+            return mapping
+            
+        except Exception as e:
+            logger.error(f"Error building field mapping from index: {str(e)}")
+            return {}
+    
+    def _flatten_schema_fields(self, fields: List) -> List:
+        """Flatten schema fields including nested table sub-fields
+        
+        Args:
+            fields: List of field definitions from schema
+            
+        Returns:
+            Flattened list of all fields
+        """
+        flattened = []
+        for field in fields:
+            if field.data_type == FieldDataType.TABLE and field.sub_fields:
+                # Add sub-fields but not the parent table field
+                flattened.extend(self._flatten_schema_fields(field.sub_fields))
+            else:
+                # Add the field itself
+                flattened.append(field)
+        return flattened
     
     def hybrid_search(
         self,
@@ -1047,28 +1216,60 @@ Respond with ONLY the English field name, nothing else."""
             credential=self.credential
         )
         
-        # TODO: Get schema object to determine relevant fields
-        # For now, we'll search across all vector fields in the index
+        # Get index definition to find all available fields
+        try:
+            index_def = self.index_client.get_index(schema_index_name)
+            all_vector_fields = [
+                field.name for field in index_def.fields
+                if field.name.endswith('_vector')
+            ]
+            all_text_fields = [
+                field.name for field in index_def.fields
+                if field.searchable and not field.name.endswith('_vector')
+            ]
+            logger.info(f"Found {len(all_vector_fields)} vector fields and {len(all_text_fields)} text fields in index")
+        except Exception as e:
+            logger.error(f"Error getting index definition: {str(e)}")
+            all_vector_fields = []
+            all_text_fields = []
+        
+        # Use LLM to determine relevant fields directly from index field names
+        relevant_field_names = self._determine_relevant_fields_from_index(
+            query, 
+            schema_index_name, 
+            all_text_fields, 
+            all_vector_fields
+        )
         
         # Generate query embedding
         query_vector = self.generate_embedding(query)
         
-        # Get index definition to find all vector fields
-        try:
-            index_def = self.index_client.get_index(schema_index_name)
-            vector_fields = [
-                field.name for field in index_def.fields
-                if field.name.endswith('_vector')
-            ]
-            logger.info(f"Found {len(vector_fields)} vector fields: {vector_fields}")
-        except Exception as e:
-            logger.error(f"Error getting index definition: {str(e)}")
-            vector_fields = []
+        # Filter vector and text fields based on relevant field names (no conversion needed!)
+        if relevant_field_names:
+            logger.info(f"Relevant field names from LLM: {relevant_field_names} (type: {type(relevant_field_names)})")
+            
+            # Ensure relevant_field_names is a list
+            if isinstance(relevant_field_names, str):
+                logger.warning(f"relevant_field_names is a string, not a list! Converting to list.")
+                relevant_field_names = [relevant_field_names]
+            
+            # Filter vector fields - add _vector suffix
+            vector_fields = [f"{name}_vector" for name in relevant_field_names if f"{name}_vector" in all_vector_fields]
+            
+            # Filter text fields - use as-is
+            text_fields = [name for name in relevant_field_names if name in all_text_fields]
+            
+            logger.info(f"Filtered to {len(vector_fields)} relevant vector fields: {vector_fields}")
+            logger.info(f"Filtered to {len(text_fields)} relevant text fields: {text_fields} (type: {type(text_fields)})")
+        else:
+            # Fallback: use all fields
+            vector_fields = all_vector_fields[:5]  # Limit to avoid too many queries
+            text_fields = all_text_fields
+            logger.warning("No relevant fields determined, using all available fields (limited)")
         
-        # Perform hybrid search across all vector fields
-        # Build vector queries for all vector fields
+        # Build vector queries for relevant vector fields
         vector_queries = []
-        for vector_field in vector_fields[:5]:  # Limit to first 5 to avoid too many queries
+        for vector_field in vector_fields[:10]:  # Limit to 10 to avoid too many queries
             vector_queries.append({
                 "kind": "vector",
                 "vector": query_vector,
@@ -1076,11 +1277,35 @@ Respond with ONLY the English field name, nothing else."""
                 "k": top_k * 2
             })
         
-        # If no vector queries, add at least one default
+        # If no vector queries, use default behavior
         if not vector_queries:
-            logger.warning("No vector fields found, using default search")
+            logger.warning("No vector fields found for relevant fields, using default search")
+        
+        # Build search fields string for keyword search (limit to relevant text fields)
+        search_fields_list = None
+        if text_fields and len(text_fields) > 0:
+            logger.info(f"Building search_fields_list from text_fields: {text_fields} (type: {type(text_fields)})")
+            
+            # Ensure text_fields is a list
+            if isinstance(text_fields, str):
+                logger.error(f"text_fields is a string, not a list! Converting: '{text_fields}'")
+                text_fields = [text_fields]
+            
+            # Validate field names (must not be empty)
+            valid_text_fields = [f for f in text_fields if isinstance(f, str) and f and len(f.strip()) > 0]
+            logger.info(f"Valid text fields after filtering: {valid_text_fields}")
+            
+            if valid_text_fields:
+                search_fields_list = valid_text_fields  # Pass as list, not comma-separated string
+                logger.info(f"Keyword search will be limited to {len(valid_text_fields)} fields: {search_fields_list}")
+            else:
+                logger.warning("No valid text fields found, will search all fields")
+        else:
+            logger.info("No text fields specified, keyword search will use all searchable fields")
         
         # Select fields to return (all non-vector fields)
+        # Note: We exclude 'select' parameter to get all fields, avoiding field name mismatch errors
+        # This ensures we don't request fields that may not exist in the actual index
         select_fields = [
             field.name for field in index_def.fields
             if not field.name.endswith('_vector')
@@ -1088,8 +1313,10 @@ Respond with ONLY the English field name, nothing else."""
         
         results = schema_search_client.search(
             search_text=query,
+            search_fields=search_fields_list,  # Pass as list, not comma-separated string
             vector_queries=vector_queries if vector_queries else None,
-            select=select_fields,
+            # Don't use select parameter - get all fields to avoid field name mismatch errors
+            # select=select_fields,
             query_type="semantic",
             semantic_configuration_name="my-semantic-config",
             top=top_k
@@ -1101,23 +1328,30 @@ Respond with ONLY the English field name, nothing else."""
             filename = result.get("filename", "")
             source_url = result.get("source_url", "")
             schema_name = result.get("schema_name", "")
+            all_image_urls = result.get("image_urls", [])  # Get image URLs from schema index
             
-            # Collect all field content
+            logger.info(f"Result from schema index: {filename}, Images: {len(all_image_urls)}")
+            
+            # Collect all field content from actual result keys (not from index definition)
+            # This avoids field name mismatch errors
             field_contents = []
-            for field_name in select_fields:
-                if field_name not in ['id', 'filename', 'source_url', 'schema_id', 'schema_name', 'metadata']:
+            excluded_fields = ['id', 'filename', 'source_url', 'image_urls', 'schema_id', 'schema_name', 'metadata', '@search.score', '@search.reranker_score', '@search.highlights', '@search.captions']
+            
+            for field_name in result.keys():
+                # Skip system fields, metadata fields, and vector fields
+                if field_name not in excluded_fields and not field_name.startswith('@') and not field_name.endswith('_vector'):
                     field_value = result.get(field_name, "")
                     if field_value:
                         field_contents.append(f"[{field_name}]\\n{field_value}")
             
             combined_content = "\\n\\n".join(field_contents)
             
-            # Use LLM to extract relevant information
+            # Use LLM to extract relevant information and determine relevant images
             extracted_info = self._extract_relevant_info_with_llm(
                 query=query,
                 content=combined_content,
-                all_image_urls=[],  # Schema-based documents don't have image_urls in the same way
-                include_images=False  # For now, image handling in schema mode is different
+                all_image_urls=all_image_urls,
+                include_images=include_images
             )
             
             # Skip if no relevant information found
@@ -1300,20 +1534,57 @@ Respond with ONLY the English field name, nothing else."""
             Dictionary with 'relevant_content' (text) and 'images' (list of relevant image URLs)
         """
         try:
-            # Extract image filename to URL mapping
+            # Extract image descriptions from content
             import re
-            image_filename_pattern = r'\(([^)]+\.png)\)'
-            image_filenames = re.findall(image_filename_pattern, content)
             
-            # Build a list of image references for LLM
+            # Pattern 1: [画像: description] (filename.png)
+            image_desc_pattern = r'\[画像:\s*([^\]]+)\]\s*\(([^)]+\.png)\)'
+            image_descriptions = re.findall(image_desc_pattern, content)
+            
+            # Pattern 2: 【画像N】で始まる行から説明を抽出
+            # 例: 【画像1】\n電源スイッチの位置を示す図。主電源...
+            image_num_pattern = r'【画像(\d+)】\s*([^\n【]+(?:\n(?!【画像)[^\n【]+)*)'
+            numbered_images = re.findall(image_num_pattern, content)
+            
+            # Create a mapping: image_index -> description
+            index_to_description = {}
+            
+            # First, map from filename-based patterns
+            filename_to_description = {}
+            for description, filename in image_descriptions:
+                filename_to_description[filename] = description.strip()
+            
+            # Map filenames to indices
+            for idx, url in enumerate(all_image_urls):
+                filename = url.split('/')[-1]
+                if filename in filename_to_description:
+                    index_to_description[idx] = filename_to_description[filename]
+            
+            # Then, map from numbered patterns (【画像N】)
+            # 画像N corresponds to index N-1
+            for img_num_str, description in numbered_images:
+                img_num = int(img_num_str)
+                idx = img_num - 1  # 画像1 = index 0
+                if 0 <= idx < len(all_image_urls):
+                    # Clean up description
+                    desc = description.strip()
+                    # Truncate if too long
+                    if len(desc) > 200:
+                        desc = desc[:200] + "..."
+                    index_to_description[idx] = desc
+            
+            logger.info(f"Found descriptions for {len(index_to_description)} images out of {len(all_image_urls)} total")
+            
+            # Build a list of image references for LLM with descriptions
             image_references = []
             if include_images and all_image_urls:
                 for idx, url in enumerate(all_image_urls):
-                    # Extract filename from URL
                     filename = url.split('/')[-1]
-                    image_references.append(f"{idx}: {filename}")
+                    description = index_to_description.get(idx, "説明なし")
+                    # 画像番号は1から始まる（ユーザー向け表示）
+                    image_references.append(f"画像{idx + 1} (インデックス {idx}):\n   説明: {description}")
             
-            image_context = "\n".join(image_references) if image_references else "画像なし"
+            image_context = "\n\n".join(image_references) if image_references else "画像なし"
             
             # Prompt for LLM to extract relevant information
             prompt = f"""以下は作業標準書のドキュメントの一部です。ユーザーの質問に関連する情報をドキュメントから抽出してください。
@@ -1321,7 +1592,13 @@ Respond with ONLY the English field name, nothing else."""
 **重要な制約:**
 1. ドキュメントに記載されている内容のみを使用してください（推測禁止）
 2. 質問に直接関連する文章のみを抽出してください
-3. 質問に関連する画像の番号をリストで指定してください（画像番号は0から始まります）
+3. **画像の選択について（重要）:**
+   - ドキュメント内の「【画像1】」「【画像2】」などは、対応する画像番号です
+   - テーブル形式のデータでは、各行に【画像N】が含まれている場合があります
+   - その行の内容（作業手順など）が質問に関連している場合、その行の画像も含めてください
+   - 画像の説明を読んで、質問の内容と直接関連しているかを判断してください
+   - **例:** 質問が「電源投入の手順」で、ドキュメントに「電源投入」の行があり、その行に【画像1】が含まれている場合
+     → 画像1の説明を確認し、関連があればインデックス 0 を含める
 4. ドキュメントに質問の答えが含まれていない場合は、relevant_content を空文字列にしてください
 
 **ユーザーの質問:**
@@ -1330,25 +1607,31 @@ Respond with ONLY the English field name, nothing else."""
 **ドキュメントの内容:**
 {content}
 
-**利用可能な画像一覧:**
+**利用可能な画像一覧（{len(all_image_urls)}個）:**
 {image_context}
+
+**画像番号とインデックスの対応:**
+- ドキュメント内の【画像1】→ インデックス 0 を指定
+- ドキュメント内の【画像2】→ インデックス 1 を指定
+- ドキュメント内の【画像3】→ インデックス 2 を指定
+（以降同様、画像Nはインデックス N-1）
 
 **回答形式（JSON）:**
 {{
-  "relevant_content": "質問に関連する部分をドキュメントから抽出",
-  "relevant_image_indices": [0, 2, 5]
+  "relevant_content": "質問に関連する部分をドキュメントから抽出（【画像N】の参照も含める）",
+  "relevant_image_indices": [0, 2, 4],  // 質問に関連する画像のインデックス（0から始まる）
+  "selection_reasoning": "画像選択の理由"
 }}
 
-ドキュメントに質問の答えが含まれていない場合:
-{{
-  "relevant_content": "",
-  "relevant_image_indices": []
-}}"""
+**重要なポイント:**
+- テーブルの各行が質問に関連する場合、その行に含まれる【画像N】も関連画像として扱ってください
+- 画像の説明を読んで、質問の内容（電源投入、材料セット、検査など）と一致するものを選んでください
+- 質問が「手順」や「方法」を尋ねている場合、その手順に対応する画像をすべて含めてください"""
 
             response = self.openai_client.chat.completions.create(
                 model=self.chat_model,
                 messages=[
-                    {"role": "system", "content": "あなたは作業標準書から必要な情報のみを抽出する専門家です。ドキュメントに記載されている内容のみを使用し、推測は一切しないでください。JSON形式で応答してください。"},
+                    {"role": "system", "content": "あなたは作業標準書から必要な情報を抽出する専門家です。ドキュメントに記載されている内容のみを使用し、推測は一切しないでください。画像を選択する際は、画像の説明を注意深く読み、質問と明確に関連している画像のみを選んでください。JSON形式で応答してください。"},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
@@ -1363,13 +1646,22 @@ Respond with ONLY the English field name, nothing else."""
             relevant_content = parsed.get("relevant_content", "")
             relevant_indices = parsed.get("relevant_image_indices", [])
             
+            logger.info(f"LLM extraction: content_length={len(relevant_content)}, selected_images={relevant_indices}, total_available={len(all_image_urls)}")
+            
             # Select relevant images based on indices
             selected_images = []
-            if include_images and relevant_indices and all_image_urls:
-                for idx in relevant_indices:
-                    if isinstance(idx, int) and 0 <= idx < len(all_image_urls):
-                        selected_images.append(all_image_urls[idx])
+            if include_images and all_image_urls:
+                if relevant_indices:
+                    # Use LLM-selected images
+                    for idx in relevant_indices:
+                        if isinstance(idx, int) and 0 <= idx < len(all_image_urls):
+                            selected_images.append(all_image_urls[idx])
+                    logger.info(f"Selected {len(selected_images)} images based on LLM selection")
+                else:
+                    # LLM didn't select any images - respect that decision
+                    logger.info(f"LLM determined no images are relevant to the query")
             
+            logger.info(f"Final selected images: {len(selected_images)}")
             logger.info(f"Extracted relevant content length: {len(relevant_content)}, selected {len(selected_images)} images from {len(all_image_urls)} total")
             
             return {
@@ -1414,6 +1706,10 @@ Respond with ONLY the English field name, nothing else."""
             if not combined_context.strip():
                 return "関連する情報が見つかりませんでした。"
             
+            # Count total images across all results
+            total_images = sum(len(result.get("images", [])) for result in search_results)
+            image_note = f"\n\n[注: この回答には{total_images}個の関連する画像が含まれています]" if total_images > 0 else ""
+            
             # RAG prompt: Use retrieved context to answer the question
             rag_prompt = f"""以下の作業標準書の情報を使用して、ユーザーの質問に答えてください。
 
@@ -1423,15 +1719,17 @@ Respond with ONLY the English field name, nothing else."""
 3. 質問に直接答える形式で回答してください
 4. 複数のドキュメントから情報がある場合は、統合してわかりやすく説明してください
 5. 手順や注意事項があれば、リスト形式で説明してください
+6. **画像が添付されている場合は、回答の中で「添付の画像を参照してください」のように言及してください**
+7. 視覚的な説明が必要な内容（位置、形状、手順など）の場合は、画像の重要性を強調してください
 
 **ユーザーの質問:**
 {query}
 
 **検索されたドキュメント情報:**
-{combined_context}
+{combined_context}{image_note}
 
 **回答:**
-上記の情報をもとに、質問に対する明確で簡潔な回答を生成してください。"""
+上記の情報をもとに、質問に対する明確で簡潔な回答を生成してください。画像が含まれている場合は、画像を参照するよう案内してください。"""
             
             logger.info(f"Generating RAG answer with {len(search_results)} documents, total context length: {len(combined_context)}")
             

@@ -139,6 +139,7 @@ const SchemaCreator: React.FC<SchemaCreatorProps> = ({ onSave, onCancel }) => {
                 className="field-type-select"
               >
                 <option value="text">テキスト</option>
+                <option value="long_text">長文テキスト</option>
                 <option value="image">画像</option>
                 <option value="table">テーブル</option>
               </select>

@@ -42,7 +42,7 @@ export interface ProcessingStatus {
   error?: string;
 }
 
-export type FieldDataType = 'text' | 'image' | 'table';
+export type FieldDataType = 'text' | 'long_text' | 'image' | 'table';
 
 export interface FieldDefinition {
   name: string;

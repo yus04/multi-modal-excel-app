@@ -6,6 +6,7 @@ from enum import Enum
 class FieldDataType(str, Enum):
     """Field data types"""
     TEXT = "text"
+    LONG_TEXT = "long_text"
     IMAGE = "image"
     TABLE = "table"
 

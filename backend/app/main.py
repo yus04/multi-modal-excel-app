@@ -96,6 +96,9 @@ async def startup_event():
         
         schema_service = SchemaService()
         
+        # Inject schema_service into search_service for field relevance determination
+        search_service.set_schema_service(schema_service)
+        
         logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Error initializing services: {str(e)}")
@@ -247,7 +250,8 @@ def process_document_background(job_id: str, file_content: bytes, filename: str,
                 text_content=text_content,
                 images=images,
                 schema=schema.dict(),
-                filename=filename
+                filename=filename,
+                progress_callback=progress_callback
             )
             
             # Create a document structure with extracted fields
