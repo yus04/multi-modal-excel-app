@@ -135,10 +135,10 @@ Excel 作業標準書検索システムは、マルチモーダル RAG（Retriev
 - 抽出した画像の保存
 - 公開 URL の提供
 
-**Azure Document Intelligence** (オプション)
-- PDF レイアウト解析
-- 表構造の認識
-- OCR 処理
+**Azure AI Content Understanding**
+- スキーマベースのフィールド抽出
+- マルチモーダルAIを使用したコンテンツ理解
+- Excel構造の解析
 
 ## データフロー
 
@@ -344,7 +344,7 @@ Application Insights
 ## 今後の拡張
 
 ### フェーズ 2
-- Azure Document Intelligence の統合
+- Azure AI Content Understanding の高度化
 - PDF サポート
 - より高度なレイアウト解析
 

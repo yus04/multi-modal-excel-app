@@ -1,0 +1,256 @@
+.schema-creator {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.schema-creator h3 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  color: #1a202c;
+  font-size: 1.25rem;
+}
+
+.error-message {
+  background: #fee;
+  border: 1px solid #fc8181;
+  border-radius: 6px;
+  padding: 0.75rem;
+  color: #c53030;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: #2d3748;
+  font-size: 0.95rem;
+}
+
+.form-input,
+.form-textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #cbd5e0;
+  border-radius: 6px;
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.form-input:focus,
+.form-textarea:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.form-textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.fields-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 2fr auto;
+  gap: 0.5rem;
+  align-items: start;
+  position: relative;
+}
+
+/* Sub-fields container for table type */
+.sub-fields-container {
+  grid-column: 1 / -1;
+  margin-top: 0.75rem;
+  padding: 1rem;
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.sub-fields-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #4a5568;
+  margin-bottom: 0.75rem;
+}
+
+.sub-field-row {
+  display: grid;
+  grid-template-columns: 2fr 1.2fr 2fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.sub-field-name-input,
+.sub-field-type-select,
+.sub-field-desc-input {
+  padding: 0.45rem;
+  border: 1px solid #cbd5e0;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  background: white;
+}
+
+.sub-field-name-input:focus,
+.sub-field-type-select:focus,
+.sub-field-desc-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.remove-sub-field-btn {
+  padding: 0.4rem 0.5rem;
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: all 0.2s;
+  color: #718096;
+}
+
+.remove-sub-field-btn:hover:not(:disabled) {
+  background: #fee;
+  border-color: #fc8181;
+  color: #e53e3e;
+}
+
+.remove-sub-field-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.add-sub-field-btn {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  background: white;
+  border: 1px dashed #a0aec0;
+  border-radius: 4px;
+  color: #667eea;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.add-sub-field-btn:hover {
+  background: #edf2f7;
+  border-color: #667eea;
+}
+
+.field-name-input,
+.field-type-select,
+.field-desc-input {
+  padding: 0.5rem;
+  border: 1px solid #cbd5e0;
+  border-radius: 4px;
+  font-size: 0.95rem;
+}
+
+.field-name-input:focus,
+.field-type-select:focus,
+.field-desc-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.remove-field-btn {
+  padding: 0.5rem;
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1.2rem;
+  transition: all 0.2s;
+}
+
+.remove-field-btn:hover:not(:disabled) {
+  background: #fee;
+  border-color: #fc8181;
+}
+
+.remove-field-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.add-field-btn {
+  padding: 0.5rem 1rem;
+  background: #f7fafc;
+  border: 1px dashed #cbd5e0;
+  border-radius: 4px;
+  color: #667eea;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.add-field-btn:hover {
+  background: #edf2f7;
+  border-color: #667eea;
+}
+
+.button-group {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.save-btn,
+.cancel-btn {
+  flex: 1;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.save-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.save-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.cancel-btn {
+  background: #e2e8f0;
+  color: #2d3748;
+}
+
+.cancel-btn:hover {
+  background: #cbd5e0;
+}
+
+@media (max-width: 768px) {
+  .field-row {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .button-group {
+    flex-direction: column;
+  }
+}

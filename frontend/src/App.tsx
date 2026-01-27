@@ -1,7 +1,24 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
-import { searchProcedures, uploadDocument, getProcessingStatus } from './api';
-import { SearchResult, UploadResponse, ProcessingStatus } from './types';
+import { 
+  searchProcedures, 
+  uploadDocument, 
+  getProcessingStatus, 
+  listSchemas, 
+  createSchema,
+  listDocuments
+} from './api';
+import { 
+  SearchResult, 
+  UploadResponse, 
+  ProcessingStatus, 
+  ExcelSchema, 
+  FieldDefinition,
+  IndexedDocument
+} from './types';
+import SchemaSelector from './components/SchemaSelector';
+import SchemaCreator from './components/SchemaCreator';
+import DocumentSelector from './components/DocumentSelector';
 
 function App() {
   const [query, setQuery] = useState('');
@@ -16,6 +33,45 @@ function App() {
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const statusIntervalRef = useRef<number | null>(null);
+  
+  // Schema management states
+  const [schemas, setSchemas] = useState<ExcelSchema[]>([]);
+  const [selectedSchemaId, setSelectedSchemaId] = useState<string | null>(null);
+  const [showSchemaCreator, setShowSchemaCreator] = useState(false);
+
+  // Document management states
+  const [documents, setDocuments] = useState<IndexedDocument[]>([]);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [selectedDocumentSchemaId, setSelectedDocumentSchemaId] = useState<string | null>(null);
+  const [loadingDocuments, setLoadingDocuments] = useState(false);
+
+  // Load schemas and documents on mount
+  useEffect(() => {
+    loadSchemas();
+    loadDocuments();
+  }, []);
+
+  const loadSchemas = async () => {
+    try {
+      const schemasList = await listSchemas();
+      setSchemas(schemasList);
+    } catch (err) {
+      console.error('Error loading schemas:', err);
+    }
+  };
+
+  const loadDocuments = async () => {
+    try {
+      setLoadingDocuments(true);
+      const documentsList = await listDocuments();
+      setDocuments(documentsList);
+      console.log('[App] Loaded documents:', documentsList);
+    } catch (err) {
+      console.error('Error loading documents:', err);
+    } finally {
+      setLoadingDocuments(false);
+    }
+  };
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,18 +87,31 @@ function App() {
     setSuccess(null);
 
     try {
+      console.log('[Search] Starting search...');
+      console.log('[Search] Query:', query.trim());
+      console.log('[Search] Selected Document ID:', selectedDocumentId);
+      console.log('[Search] Selected Document Schema ID:', selectedDocumentSchemaId);
+      console.log('[Search] Top K: 5');
+      console.log('[Search] Include Images: true');
+      
       const response = await searchProcedures({
         query: query.trim(),
         top_k: 5,
         include_images: true,
+        schema_id: selectedDocumentSchemaId || undefined,
       });
+
+      console.log('[Search] Response received:', response);
+      console.log('[Search] Total results:', response.total_results);
+      console.log('[Search] Results count:', response.results.length);
+      console.log('[Search] Message:', response.message);
 
       setResults(response.results);
       setTotalResults(response.total_results);
       setMessage(response.message || null);
     } catch (err) {
       setError('検索中にエラーが発生しました。もう一度お試しください。');
-      console.error('Search error:', err);
+      console.error('[Search] Search error:', err);
     } finally {
       setLoading(false);
     }
@@ -67,14 +136,14 @@ function App() {
       return;
     }
 
-    console.log('[Upload] Starting upload for file:', selectedFile.name);
+    console.log('[Upload] Starting upload for file:', selectedFile.name, 'with schema:', selectedSchemaId);
     setUploading(true);
     setError(null);
     setSuccess(null);
     setProcessingStatus(null);
 
     try {
-      const response: UploadResponse = await uploadDocument(selectedFile);
+      const response: UploadResponse = await uploadDocument(selectedFile, selectedSchemaId || undefined);
       console.log('[Upload] Upload response:', response);
       console.log('[Upload] Response job_id:', response.job_id);
       console.log('[Upload] Response type:', typeof response.job_id);
@@ -83,7 +152,7 @@ function App() {
         console.log('[Upload] Job ID found, starting status polling for job:', response.job_id);
         
         // Initialize processing status immediately to show progress bar
-        const initialStatus = {
+        const initialStatus: ProcessingStatus = {
           job_id: response.job_id,
           status: 'pending',
           filename: selectedFile.name,
@@ -140,6 +209,8 @@ function App() {
             clearInterval(statusIntervalRef.current);
             statusIntervalRef.current = null;
           }
+          // Reload documents list after successful upload
+          loadDocuments();
         } else if (status.status === 'failed') {
           console.log('[Polling] Processing failed:', status.error);
           setError(`処理中にエラーが発生しました: ${status.error || '不明なエラー'}`);
@@ -161,6 +232,23 @@ function App() {
     statusIntervalRef.current = window.setInterval(pollStatus, 1000);
   };
 
+  const handleCreateSchema = async (name: string, description: string, fields: FieldDefinition[]) => {
+    try {
+      const newSchema = await createSchema({ name, description, fields });
+      setSchemas([...schemas, newSchema]);
+      setSelectedSchemaId(newSchema.id);
+      setShowSchemaCreator(false);
+      setSuccess(`スキーマ「${name}」を作成しました`);
+    } catch (err) {
+      setError('スキーマの作成中にエラーが発生しました');
+      console.error('Error creating schema:', err);
+    }
+  };
+
+  const handleCancelSchemaCreator = () => {
+    setShowSchemaCreator(false);
+  };
+
   useEffect(() => {
     return () => {
       if (statusIntervalRef.current) {
@@ -180,6 +268,25 @@ function App() {
         {/* Upload Section */}
         <section className="upload-section">
           <h2>📤 Excel ファイルのアップロード</h2>
+          
+          {/* Schema Selector */}
+          {!showSchemaCreator && (
+            <SchemaSelector
+              schemas={schemas}
+              selectedSchemaId={selectedSchemaId}
+              onSelect={setSelectedSchemaId}
+              onCreateNew={() => setShowSchemaCreator(true)}
+            />
+          )}
+          
+          {/* Schema Creator */}
+          {showSchemaCreator && (
+            <SchemaCreator
+              onSave={handleCreateSchema}
+              onCancel={handleCancelSchemaCreator}
+            />
+          )}
+          
           <div className="file-input-wrapper">
             <input
               ref={fileInputRef}
@@ -190,7 +297,7 @@ function App() {
             />
             <button
               onClick={handleUpload}
-              disabled={!selectedFile || uploading}
+              disabled={!selectedFile || uploading || showSchemaCreator}
               className="upload-button"
             >
               {uploading ? 'アップロード中...' : 'アップロード'}
@@ -236,6 +343,19 @@ function App() {
         {/* Search Section */}
         <section className="search-section">
           <h2>🔍 作業手順の検索</h2>
+          
+          {/* Document Selector */}
+          <DocumentSelector
+            documents={documents}
+            selectedDocumentId={selectedDocumentId}
+            onSelect={(docId, schemaId) => {
+              setSelectedDocumentId(docId);
+              setSelectedDocumentSchemaId(schemaId);
+              console.log('[App] Document selected:', docId, 'Schema ID:', schemaId);
+            }}
+            loading={loadingDocuments}
+          />
+          
           <form onSubmit={handleSearch} className="search-form">
             <input
               type="text"

@@ -1,15 +1,17 @@
 export interface SearchResult {
-  answer: string;  // LLMが生成した回答テキスト
-  images: string[];  // 回答に関連する画像のみ
+  answer: string;  // LLM-generated answer text
+  images: string[];  // Only relevant images for the answer
   source_document: string;
   source_url: string;
   score: number;
+  schema_name?: string;  // Schema name (for schema-based indexing)
 }
 
 export interface SearchRequest {
   query: string;
   top_k?: number;
   include_images?: boolean;
+  schema_id?: string;  // Optional schema ID to search in schema-specific index
 }
 
 export interface SearchResponse {
@@ -38,4 +40,37 @@ export interface ProcessingStatus {
   current_step: string;
   message?: string;
   error?: string;
+}
+
+export type FieldDataType = 'text' | 'long_text' | 'image' | 'table';
+
+export interface FieldDefinition {
+  name: string;
+  data_type: FieldDataType;
+  description?: string;
+  sub_fields?: FieldDefinition[];  // For table type
+}
+
+export interface ExcelSchema {
+  id: string;
+  name: string;
+  description?: string;
+  fields: FieldDefinition[];
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface SchemaCreateRequest {
+  name: string;
+  description?: string;
+  fields: FieldDefinition[];
+}
+
+export interface IndexedDocument {
+  id: string;
+  filename: string;
+  source_url: string;
+  schema_id?: string;
+  schema_name?: string;
+  index_name: string;
 }

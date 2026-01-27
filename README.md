@@ -92,7 +92,7 @@
   - Azure OpenAI Service
   - Azure AI Search
   - Azure Blob Storage
-  - Azure Document Intelligence (オプション)
+  - Azure AI Content Understanding
 
 ### 1. リポジトリのクローン
 
@@ -138,9 +138,9 @@ AZURE_SEARCH_INDEX_NAME=excel-procedures-index
 AZURE_STORAGE_CONNECTION_STRING=your-connection-string
 AZURE_STORAGE_CONTAINER_NAME=excel-files
 
-# Azure Document Intelligence Configuration
-AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://your-di-resource.cognitiveservices.azure.com/
-AZURE_DOCUMENT_INTELLIGENCE_API_KEY=your-di-api-key
+# Azure AI Content Understanding Configuration
+AZURE_CONTENT_UNDERSTANDING_ENDPOINT=https://your-openai-resource.openai.azure.com/
+AZURE_CONTENT_UNDERSTANDING_API_KEY=your-content-understanding-api-key
 
 # Application Configuration
 ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173

@@ -1,5 +1,42 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from enum import Enum
+
+
+class FieldDataType(str, Enum):
+    """Field data types"""
+    TEXT = "text"
+    LONG_TEXT = "long_text"
+    IMAGE = "image"
+    TABLE = "table"
+
+
+class FieldDefinition(BaseModel):
+    """Definition of a field in Excel schema"""
+    name: str
+    data_type: FieldDataType
+    description: Optional[str] = None
+    sub_fields: Optional[List['FieldDefinition']] = None  # For table type
+
+# Enable forward reference for recursive model
+FieldDefinition.model_rebuild()
+
+
+class ExcelSchema(BaseModel):
+    """Schema definition for Excel file structure"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    fields: List[FieldDefinition]
+    created_at: str
+    updated_at: Optional[str] = None
+
+
+class SchemaCreateRequest(BaseModel):
+    """Request to create a new schema"""
+    name: str
+    description: Optional[str] = None
+    fields: List[FieldDefinition]
 
 
 class ProcedureStep(BaseModel):
@@ -29,6 +66,7 @@ class SearchRequest(BaseModel):
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
     include_images: bool = True
+    schema_id: Optional[str] = None  # If provided, searches in schema-specific index
 
 
 class SearchResponse(BaseModel):
@@ -57,3 +95,13 @@ class ProcessingStatus(BaseModel):
     current_step: str = ""
     message: str = ""
     error: str = ""
+
+
+class IndexedDocument(BaseModel):
+    """Represents a document indexed in the search service"""
+    id: str
+    filename: str
+    source_url: str
+    schema_id: Optional[str] = None
+    schema_name: Optional[str] = None
+    index_name: str

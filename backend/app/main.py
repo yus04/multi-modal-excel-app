@@ -4,17 +4,22 @@ import base64
 import uuid
 import asyncio
 from datetime import datetime
-from typing import Optional, Dict
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from typing import Optional, Dict, List
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.models import SearchRequest, SearchResponse, UploadResponse, SearchResult, ProcessingStatus
+from app.models import (
+    SearchRequest, SearchResponse, UploadResponse, SearchResult, ProcessingStatus,
+    ExcelSchema, SchemaCreateRequest, FieldDefinition, IndexedDocument
+)
 from app.blob_service import BlobStorageService
 from app.excel_processor import ExcelProcessor
 from app.llm_service import MultiModalLLMService
+from app.content_understanding_service import ContentUnderstandingService
 from app.search_service import SearchService
+from app.schema_service import SchemaService
 
 # Configure logging
 logging.basicConfig(
@@ -42,7 +47,9 @@ app.add_middleware(
 # Initialize services
 blob_service: Optional[BlobStorageService] = None
 llm_service: Optional[MultiModalLLMService] = None
+content_understanding_service: Optional[ContentUnderstandingService] = None
 search_service: Optional[SearchService] = None
+schema_service: Optional[SchemaService] = None
 
 # In-memory job status storage (for production, use Redis or database)
 job_status_store: Dict[str, ProcessingStatus] = {}
@@ -51,7 +58,7 @@ job_status_store: Dict[str, ProcessingStatus] = {}
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global blob_service, llm_service, search_service
+    global blob_service, llm_service, content_understanding_service, search_service, schema_service
     
     try:
         logger.info("Initializing services...")
@@ -68,6 +75,14 @@ async def startup_event():
             api_version=settings.azure_openai_api_version
         )
         
+        # Initialize Content Understanding Service (uses same Azure OpenAI endpoint)
+        content_understanding_service = ContentUnderstandingService(
+            endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key,
+            deployment_name=settings.azure_openai_deployment_name,
+            api_version=settings.azure_openai_api_version
+        )
+        
         search_service = SearchService(
             search_endpoint=settings.azure_search_endpoint,
             search_api_key=settings.azure_search_api_key,
@@ -78,6 +93,11 @@ async def startup_event():
             openai_embedding_deployment=settings.azure_openai_embedding_deployment,
             openai_api_version=settings.azure_openai_api_version
         )
+        
+        schema_service = SchemaService()
+        
+        # Inject schema_service into search_service for field relevance determination
+        search_service.set_schema_service(schema_service)
         
         logger.info("All services initialized successfully")
     except Exception as e:
@@ -104,10 +124,56 @@ async def health_check():
         "services": {
             "blob_storage": blob_service is not None,
             "llm_service": llm_service is not None,
-            "search_service": search_service is not None
+            "content_understanding_service": content_understanding_service is not None,
+            "search_service": search_service is not None,
+            "schema_service": schema_service is not None
         },
         "job_store_size": len(job_status_store)
     }
+
+
+@app.get("/schemas", response_model=List[ExcelSchema])
+async def list_schemas():
+    """List all available schemas"""
+    logger.info("Listing schemas")
+    return schema_service.list_schemas()
+
+
+@app.post("/schemas", response_model=ExcelSchema)
+async def create_schema(request: SchemaCreateRequest):
+    """Create a new schema"""
+    logger.info(f"Creating schema: {request.name}")
+    return schema_service.create_schema(request)
+
+
+@app.get("/schemas/{schema_id}", response_model=ExcelSchema)
+async def get_schema(schema_id: str):
+    """Get a specific schema by ID"""
+    logger.info(f"Getting schema: {schema_id}")
+    schema = schema_service.get_schema(schema_id)
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return schema
+
+
+@app.put("/schemas/{schema_id}", response_model=ExcelSchema)
+async def update_schema(schema_id: str, request: SchemaCreateRequest):
+    """Update an existing schema"""
+    logger.info(f"Updating schema: {schema_id}")
+    schema = schema_service.update_schema(schema_id, request)
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return schema
+
+
+@app.delete("/schemas/{schema_id}")
+async def delete_schema(schema_id: str):
+    """Delete a schema"""
+    logger.info(f"Deleting schema: {schema_id}")
+    success = schema_service.delete_schema(schema_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return {"success": True, "message": "Schema deleted successfully"}
 
 
 @app.get("/status/{job_id}", response_model=ProcessingStatus)
@@ -122,9 +188,12 @@ async def get_processing_status(job_id: str):
     return status
 
 
-def process_document_background(job_id: str, file_content: bytes, filename: str):
+def process_document_background(job_id: str, file_content: bytes, filename: str, schema: Optional[ExcelSchema] = None):
     """Background task to process document with progress tracking"""
     logger.info(f"[{job_id}] Background processing started for {filename}")
+    if schema:
+        logger.info(f"[{job_id}] Using schema: {schema.name}")
+    
     try:
         # Update status: Upload to blob storage
         job_status_store[job_id].status = "processing"
@@ -171,18 +240,68 @@ def process_document_background(job_id: str, file_content: bytes, filename: str)
         job_status_store[job_id].progress = 0
         logger.info(f"Starting document structuring with {len(images)} images")
         
-        document = llm_service.structure_document(
-            text_content, 
-            images, 
-            filename,
-            progress_callback=progress_callback
-        )
+        # Structure document differently based on whether schema is provided
+        if schema:
+            # Use Content Understanding Service for schema-based extraction
+            logger.info(f"Using Content Understanding with schema: {schema.name}")
+            
+            # First, extract fields using Content Understanding
+            extracted_fields = content_understanding_service.extract_fields_from_excel(
+                text_content=text_content,
+                images=images,
+                schema=schema.dict(),
+                filename=filename,
+                progress_callback=progress_callback
+            )
+            
+            # Create a document structure with extracted fields
+            document = {
+                'filename': filename,
+                'content': '',  # Will be generated from extracted fields
+                'images': images,
+                'extracted_fields': extracted_fields,
+                'metadata': {
+                    'sheet_count': len(text_content),
+                    'image_count': len(images),
+                    'total_rows': sum(len(sheet.get('rows', [])) for sheet in text_content),
+                    'schema_id': schema.id,
+                    'schema_name': schema.name
+                }
+            }
+            
+            # Generate a combined content from extracted fields for display
+            content_parts = [f"ファイル名: {filename}\n"]
+            for field_name, field_value in extracted_fields.items():
+                if field_value is not None:
+                    content_parts.append(f"{field_name}: {field_value}\n")
+            document['content'] = "\n".join(content_parts)
+            
+            logger.info(f"Extracted {len(extracted_fields)} fields using Content Understanding")
+        else:
+            # Use traditional multimodal LLM structuring
+            document = llm_service.structure_document(
+                text_content, 
+                images, 
+                filename,
+                progress_callback=progress_callback
+            )
+        
         logger.info(f"Document structured with {document['metadata']['image_count']} images")
         
         # Index in Azure AI Search
         job_status_store[job_id].current_step = "インデックスに登録中..."
         job_status_store[job_id].progress = 95
-        search_service.index_document(document, filename, file_url)
+        
+        if schema:
+            # Use schema-based indexing
+            logger.info(f"[{job_id}] Indexing document with schema: {schema.name} (ID: {schema.id})")
+            search_service.index_document_with_schema(document, filename, file_url, schema)
+            logger.info(f"[{job_id}] Successfully indexed document in schema-specific index")
+        else:
+            # Use default indexing
+            logger.info(f"[{job_id}] Indexing document in default index")
+            search_service.index_document(document, filename, file_url)
+            logger.info(f"[{job_id}] Successfully indexed document in default index")
         
         # Complete
         job_status_store[job_id].status = "completed"
@@ -198,7 +317,11 @@ def process_document_background(job_id: str, file_content: bytes, filename: str)
 
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_document(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    schema_id: Optional[str] = Form(None)
+):
     """
     Upload and process an Excel document
     
@@ -206,9 +329,18 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     - Structures content using multimodal LLM
     - Uploads to blob storage
     - Indexes in Azure AI Search
+    - If schema_id provided, uses schema-based field extraction
     """
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are supported")
+    
+    # Validate schema if provided
+    schema = None
+    if schema_id:
+        schema = schema_service.get_schema(schema_id)
+        if not schema:
+            raise HTTPException(status_code=404, detail=f"Schema not found: {schema_id}")
+        logger.info(f"Using schema: {schema.name} ({schema_id})")
     
     try:
         logger.info(f"Processing upload: {file.filename}")
@@ -240,7 +372,8 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
             process_document_background,
             job_id,
             file_content,
-            file.filename
+            file.filename,
+            schema
         )
         logger.info(f"Started background task for {job_id}")
         
@@ -259,6 +392,44 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
 
 
+@app.get("/documents", response_model=List[IndexedDocument])
+async def list_documents():
+    """List all indexed documents across all indexes"""
+    logger.info("Listing all indexed documents")
+    try:
+        documents = search_service.get_all_documents()
+        return documents
+    except Exception as e:
+        logger.error(f"Error listing documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/debug/index-status")
+async def get_index_status():
+    """
+    Debug endpoint to check index status and document count
+    """
+    try:
+        default_count = search_service.get_document_count()
+        
+        # Get counts for all schema indexes
+        schema_counts = {}
+        for schema_id in search_service.schema_indexes.keys():
+            schema_counts[schema_id] = search_service.get_document_count(schema_id)
+        
+        return {
+            "default_index": {
+                "name": search_service.index_name,
+                "document_count": default_count
+            },
+            "schema_indexes": schema_counts,
+            "registered_schemas": list(search_service.schema_indexes.keys())
+        }
+    except Exception as e:
+        logger.error(f"Error getting index status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
     """
@@ -267,15 +438,19 @@ async def search(request: SearchRequest):
     - Performs vector + keyword + semantic search
     - Returns results with images and references
     - No results message if nothing found
+    - If schema_id provided, searches in schema-specific index
     """
     try:
         logger.info(f"Searching for: {request.query}")
+        if request.schema_id:
+            logger.info(f"Using schema: {request.schema_id}")
         
         # Perform hybrid search
         results = search_service.hybrid_search(
             query=request.query,
             top_k=request.top_k,
-            include_images=request.include_images
+            include_images=request.include_images,
+            schema_id=request.schema_id
         )
         
         # Prepare response
