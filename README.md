@@ -9,7 +9,7 @@
 ### 主な特徴
 
 - **📊 Excel ファイル処理**: Excel ファイルからテキストと画像を自動抽出
-- **🤖 マルチモーダル AI**: Azure OpenAI (GPT-4o) による画像の自動説明生成とコンテンツ統合
+- **🤖 マルチモーダル AI**: Azure OpenAI (GPT-5.2) による画像の自動説明生成とコンテンツ統合
 - **🔍 ハイブリッド検索**: ベクトル検索 + キーワード検索 + セマンティック検索
 - **🖼️ 画像同時表示**: 検索結果に関連画像を自動で表示
 - **📎 出典リンク**: 元の Excel ファイルへのリンクを提供
@@ -43,17 +43,17 @@
 - Pydantic (データバリデーション)
 
 **Azure サービス**
-- Azure OpenAI Service (GPT-4o with Vision, text-embedding-3-small)
+- Azure OpenAI Service (GPT-5.2, text-embedding-3-small)
 - Azure AI Search (ハイブリッド + セマンティック検索)
 - Azure Blob Storage (ファイル保存)
-- Azure Document Intelligence (文書解析)
+- Azure AI Content Understanding (文書解析)
 
 ## 📋 機能要件
 
 ### 1. ドキュメント処理パイプライン
 - Excel ファイルのアップロード (.xlsx, .xls)
 - テキストと画像の自動抽出（位置情報を含む）
-- GPT-4o による画像の説明文生成
+- GPT-5.2 による画像の説明文生成
 - テキストと画像説明を位置情報に基づいて統合
 - 統合コンテンツのベクトル化
 - Azure Blob Storage へのアップロード
@@ -124,8 +124,8 @@ cp .env.template .env
 # Azure OpenAI Configuration
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-api-key
-# Deployment name should support vision API (e.g., gpt-4o, gpt-4-vision-preview)
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
+# Deployment name should support vision API (e.g., gpt-5.2, GPT-5.2)
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.2
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
 
@@ -287,7 +287,7 @@ Extract Text & Images with Position (openpyxl)
 Upload Images to Blob Storage
     - 画像のアップロード (PNG 形式)
     ↓
-Generate Image Descriptions (GPT-4o Vision API)
+Generate Image Descriptions (GPT-5.2)
     - 各画像の内容を日本語で説明
     ↓
 Merge Text and Image Descriptions
