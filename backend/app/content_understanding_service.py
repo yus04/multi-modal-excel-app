@@ -26,7 +26,7 @@ class ContentUnderstandingService:
         Args:
             endpoint: Azure OpenAI endpoint
             api_key: Azure OpenAI API key
-            deployment_name: Deployment name (GPT-4o or similar multimodal model)
+            deployment_name: Deployment name (GPT-5.2 or similar multimodal model)
             api_version: API version
         """
         self.client = AzureOpenAI(
