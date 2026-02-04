@@ -1110,7 +1110,8 @@ Return the field names as a JSON array.
         query: str,
         top_k: int = 5,
         include_images: bool = True,
-        schema_id: Optional[str] = None
+        schema_id: Optional[str] = None,
+        index_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search (vector + keyword + semantic) and extract relevant information using LLM
@@ -1119,8 +1120,8 @@ Return the field names as a JSON array.
             query: Search query
             top_k: Number of results to return
             include_images: Whether to include images in results
-            schema_id: If provided, searches in the schema-specific index.
-                      If None, searches across ALL indexes (default + all schema indexes)
+            schema_id: If provided, searches in the schema-specific index
+            index_name: If provided, searches in the specified index directly
         
         Returns:
             List of search results
@@ -1131,10 +1132,15 @@ Return the field names as a JSON array.
             logger.info(f"Top K: {top_k}")
             logger.info(f"Include Images: {include_images}")
             logger.info(f"Schema ID: {schema_id}")
+            logger.info(f"Index Name: {index_name}")
             logger.info(f"Registered schema indexes: {list(self.schema_indexes.keys())}")
             
-            # Determine which index(es) to search
-            if schema_id:
+            # Priority: index_name > schema_id > all indexes
+            if index_name:
+                # Search in the specified index directly
+                logger.info(f"Using specified index: {index_name}")
+                return self._hybrid_search_by_index_name(query, top_k, include_images, index_name)
+            elif schema_id:
                 # Search in specific schema index
                 if schema_id in self.schema_indexes:
                     logger.info(f"Using schema-specific index for schema_id: {schema_id}")
@@ -1676,6 +1682,148 @@ Return the field names as a JSON array.
                 "relevant_content": content[:1000] if content else "",
                 "images": all_image_urls[:3] if include_images else []
             }
+    
+    def _hybrid_search_by_index_name(
+        self,
+        query: str,
+        top_k: int,
+        include_images: bool,
+        index_name: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform hybrid search on a specific index by index name
+        
+        This method searches directly in the specified index, regardless of whether
+        it's a default index or a schema-based index.
+        
+        Args:
+            query: Search query
+            top_k: Number of results to return
+            include_images: Whether to include images
+            index_name: Name of the index to search
+            
+        Returns:
+            List of search results
+        """
+        logger.info(f"Searching in specific index: {index_name}")
+        
+        try:
+            # Create search client for the specified index
+            index_search_client = SearchClient(
+                endpoint=self.search_endpoint,
+                index_name=index_name,
+                credential=self.credential
+            )
+            
+            # Check if this is a schema-based index
+            is_schema_index = index_name.startswith(f"{self.index_name}-schema-")
+            
+            if is_schema_index:
+                # Use schema-based search logic
+                # Find the schema_id for this index
+                schema_id = None
+                for sid, idx_name in self.schema_indexes.items():
+                    if idx_name == index_name:
+                        schema_id = sid
+                        break
+                
+                if schema_id:
+                    logger.info(f"Index {index_name} is a schema-based index for schema_id: {schema_id}")
+                    return self._hybrid_search_schema_index(query, top_k, include_images, schema_id)
+                else:
+                    logger.warning(f"Index {index_name} looks like a schema index but schema_id not found")
+            
+            # Use default search logic
+            logger.info(f"Using default search logic for index: {index_name}")
+            
+            # Generate query embedding
+            query_vector = self.generate_embedding(query)
+            
+            # Get index definition to determine available fields
+            try:
+                index_def = self.index_client.get_index(index_name)
+                has_content_vector = any(field.name == "content_vector" for field in index_def.fields)
+                select_fields = [
+                    field.name for field in index_def.fields
+                    if not field.name.endswith('_vector')
+                ]
+            except Exception as e:
+                logger.warning(f"Could not get index definition: {str(e)}")
+                has_content_vector = True
+                select_fields = None
+            
+            # Build search parameters
+            search_params = {
+                "search_text": query,
+                "query_type": "semantic",
+                "semantic_configuration_name": "my-semantic-config",
+                "top": top_k
+            }
+            
+            # Add vector search if content_vector field exists
+            if has_content_vector:
+                search_params["vector_queries"] = [{
+                    "kind": "vector",
+                    "vector": query_vector,
+                    "fields": "content_vector",
+                    "k": top_k * 2
+                }]
+            
+            # Add select fields if we have them
+            if select_fields:
+                search_params["select"] = select_fields
+            
+            # Perform search
+            results = index_search_client.search(**search_params)
+            
+            # Process results
+            search_results = []
+            for result in results:
+                # Extract content
+                content = result.get("content", "")
+                all_image_urls = result.get("image_urls", [])
+                filename = result.get("filename", "")
+                source_url = result.get("source_url", "")
+                
+                # Use LLM to extract relevant information
+                extracted_info = self._extract_relevant_info_with_llm(
+                    query=query,
+                    content=content,
+                    all_image_urls=all_image_urls,
+                    include_images=include_images
+                )
+                
+                # Skip if no relevant information found
+                if not extracted_info or not extracted_info.get("relevant_content"):
+                    continue
+                
+                search_result = {
+                    "relevant_content": extracted_info.get("relevant_content", ""),
+                    "images": extracted_info.get("images", []),
+                    "source_document": filename,
+                    "source_url": source_url,
+                    "score": result.get("@search.score", 0.0)
+                }
+                
+                search_results.append(search_result)
+            
+            logger.info(f"Index {index_name} returned {len(search_results)} results (before RAG)")
+            
+            # Generate final answer using RAG if we have results
+            if search_results:
+                logger.info("Generating final answer using RAG...")
+                final_answer = self._generate_answer_with_rag(query, search_results)
+                
+                # Replace relevant_content with generated answer in each result
+                for result in search_results:
+                    result["answer"] = final_answer
+                    del result["relevant_content"]
+            
+            return search_results
+            
+        except Exception as e:
+            logger.error(f"Error searching index {index_name}: {str(e)}")
+            raise
     
     def _generate_answer_with_rag(
         self,

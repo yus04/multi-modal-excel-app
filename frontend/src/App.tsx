@@ -43,6 +43,7 @@ function App() {
   const [documents, setDocuments] = useState<IndexedDocument[]>([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [selectedDocumentSchemaId, setSelectedDocumentSchemaId] = useState<string | null>(null);
+  const [selectedDocumentIndexName, setSelectedDocumentIndexName] = useState<string | null>(null);
   const [loadingDocuments, setLoadingDocuments] = useState(false);
 
   // Load schemas and documents on mount
@@ -91,6 +92,7 @@ function App() {
       console.log('[Search] Query:', query.trim());
       console.log('[Search] Selected Document ID:', selectedDocumentId);
       console.log('[Search] Selected Document Schema ID:', selectedDocumentSchemaId);
+      console.log('[Search] Selected Document Index Name:', selectedDocumentIndexName);
       console.log('[Search] Top K: 5');
       console.log('[Search] Include Images: true');
       
@@ -98,7 +100,7 @@ function App() {
         query: query.trim(),
         top_k: 5,
         include_images: true,
-        schema_id: selectedDocumentSchemaId || undefined,
+        index_name: selectedDocumentIndexName || undefined,
       });
 
       console.log('[Search] Response received:', response);
@@ -348,10 +350,11 @@ function App() {
           <DocumentSelector
             documents={documents}
             selectedDocumentId={selectedDocumentId}
-            onSelect={(docId, schemaId) => {
+            onSelect={(docId, schemaId, indexName) => {
               setSelectedDocumentId(docId);
               setSelectedDocumentSchemaId(schemaId);
-              console.log('[App] Document selected:', docId, 'Schema ID:', schemaId);
+              setSelectedDocumentIndexName(indexName);
+              console.log('[App] Document selected:', docId, 'Schema ID:', schemaId, 'Index Name:', indexName);
             }}
             loading={loadingDocuments}
           />

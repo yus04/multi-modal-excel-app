@@ -67,6 +67,7 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     include_images: bool = True
     schema_id: Optional[str] = None  # If provided, searches in schema-specific index
+    index_name: Optional[str] = None  # If provided, searches in the specified index
 
 
 class SearchResponse(BaseModel):

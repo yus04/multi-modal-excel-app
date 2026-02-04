@@ -444,13 +444,16 @@ async def search(request: SearchRequest):
         logger.info(f"Searching for: {request.query}")
         if request.schema_id:
             logger.info(f"Using schema: {request.schema_id}")
+        if request.index_name:
+            logger.info(f"Using index: {request.index_name}")
         
         # Perform hybrid search
         results = search_service.hybrid_search(
             query=request.query,
             top_k=request.top_k,
             include_images=request.include_images,
-            schema_id=request.schema_id
+            schema_id=request.schema_id,
+            index_name=request.index_name
         )
         
         # Prepare response

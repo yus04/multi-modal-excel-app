@@ -12,6 +12,7 @@ export interface SearchRequest {
   top_k?: number;
   include_images?: boolean;
   schema_id?: string;  // Optional schema ID to search in schema-specific index
+  index_name?: string;  // Optional index name to search in a specific index
 }
 
 export interface SearchResponse {
