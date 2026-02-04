@@ -5,7 +5,7 @@ import './DocumentSelector.css';
 interface DocumentSelectorProps {
   documents: IndexedDocument[];
   selectedDocumentId: string | null;
-  onSelect: (documentId: string | null, schemaId: string | null) => void;
+  onSelect: (documentId: string | null, schemaId: string | null, indexName: string | null) => void;
   loading?: boolean;
 }
 
@@ -19,15 +19,16 @@ const DocumentSelector: React.FC<DocumentSelectorProps> = ({
     const documentId = e.target.value;
     
     if (!documentId) {
-      onSelect(null, null);
+      onSelect(null, null, null);
       return;
     }
     
-    // Find the selected document to get its schema_id
+    // Find the selected document to get its schema_id and index_name
     const selectedDoc = documents.find(doc => doc.id === documentId);
     const schemaId = selectedDoc?.schema_id || null;
+    const indexName = selectedDoc?.index_name || null;
     
-    onSelect(documentId, schemaId);
+    onSelect(documentId, schemaId, indexName);
   };
 
   const formatDocumentDisplay = (doc: IndexedDocument): string => {
